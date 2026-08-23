@@ -17,6 +17,8 @@ return new class extends Migration
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
+            $table->string('currency', 3)->default('IDR');
+            $table->enum('theme', ['light', 'dark', 'system'])->default('system');
             $table->rememberToken();
             $table->timestamps();
         });
