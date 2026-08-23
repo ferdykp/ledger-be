@@ -5,23 +5,27 @@ namespace App\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
-class UpdateAccountRequest extends FormRequest
+class UpdateProfileRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        // Memastikan akun yang diedit adalah milik user yang sedang login
-        return $this->account && $this->account->user_id === $this->user()->id;
+        return true;
     }
 
     public function rules(): array
     {
         return [
             'name' => ['sometimes', 'required', 'string', 'max:255'],
-            'type' => ['sometimes', 'required', Rule::in(['cash', 'bank', 'ewallet', 'credit_card'])],
-            'balance' => ['sometimes', 'numeric'],
-            'color' => ['nullable', 'string', 'regex:/^#([a-fA-F0-9]{6})$/'],
-            'icon' => ['nullable', 'string', 'max:255'],
-            'is_archived' => ['nullable', 'boolean'],
+            'email' => [
+                'sometimes',
+                'required',
+                'email',
+                'max:255',
+                Rule::unique('users', 'email')->ignore($this->user()->id),
+            ],
+            'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,gif,webp', 'max:2048'],
+            'currency' => ['nullable', 'string', 'max:3'],
+            'theme' => ['nullable', Rule::in(['light', 'dark', 'system'])],
         ];
     }
 }

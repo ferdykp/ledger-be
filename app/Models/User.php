@@ -2,25 +2,32 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Database\Factories\UserFactory;
-use Illuminate\Database\Eloquent\Attributes\Fillable;
-use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Illuminate\Testing\Fluent\Concerns\Has;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\HasApiTokens;
 
-// #[Fillable(['name', 'email', 'password'])]
-// #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
     use HasApiTokens, HasFactory, Notifiable;
 
-    protected $fillable = ['name', 'email', 'password', 'currency', 'theme'];
+    protected $fillable = ['name', 'email', 'password', 'currency', 'theme', 'avatar'];
     protected $hidden = ['password', 'remember_token'];
     protected $casts = ['email_verified_at' => 'datetime', 'password' => 'hashed'];
+
+    // Append URL Avatar
+    protected $appends = ['avatar_url'];
+
+    public function getAvatarUrlAttribute(): string
+    {
+        if ($this->avatar) {
+            return asset('storage/' . $this->avatar);
+        }
+        // Fallback Avatar Default (UI Avatars)
+        return 'https://ui-avatars.com/api/?name=' . urlencode($this->name) . '&background=6C4CF1&color=fff';
+    }
 
     public function accounts()
     {
@@ -41,17 +48,5 @@ class User extends Authenticatable
     public function goals()
     {
         return $this->hasMany(Goal::class);
-    }
-    public function bills()
-    {
-        return $this->hasMany(Bill::class);
-    }
-    public function debts()
-    {
-        return $this->hasMany(Debt::class);
-    }
-    public function tags()
-    {
-        return $this->hasMany(Tag::class);
     }
 }
