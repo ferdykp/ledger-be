@@ -5,27 +5,29 @@ namespace App\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
-class UpdateProfileRequest extends FormRequest
+class UpdateAccountRequest extends FormRequest
 {
+    /**
+     * Pastikan akun yang akan di-update milik user yang sedang login.
+     */
     public function authorize(): bool
     {
-        return true;
+        $account = $this->route('account');
+        return $account && $account->user_id === $this->user()->id;
     }
 
+    /**
+     * Aturan validasi pembaruan akun.
+     */
     public function rules(): array
     {
         return [
             'name' => ['sometimes', 'required', 'string', 'max:255'],
-            'email' => [
-                'sometimes',
-                'required',
-                'email',
-                'max:255',
-                Rule::unique('users', 'email')->ignore($this->user()->id),
-            ],
-            'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,gif,webp', 'max:2048'],
-            'currency' => ['nullable', 'string', 'max:3'],
-            'theme' => ['nullable', Rule::in(['light', 'dark', 'system'])],
+            'type' => ['sometimes', 'required', Rule::in(['cash', 'bank', 'ewallet', 'credit_card'])],
+            'balance' => ['sometimes', 'numeric'],
+            'color' => ['nullable', 'string', 'regex:/^#([a-fA-F0-9]{6})$/'],
+            'icon' => ['nullable', 'string', 'max:255'],
+            'is_archived' => ['nullable', 'boolean'],
         ];
     }
 }
