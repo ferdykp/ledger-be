@@ -1,91 +1,50 @@
 <?php
-
 namespace App\Http\Controllers;
 
 use App\Http\Requests\Transaction\StoreTransactionRequest;
+use App\Http\Requests\Transaction\UpdateTransactionRequest;
 use App\Http\Resources\TransactionResource;
+use App\Models\Transaction;
 use App\Services\TransactionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
-use App\Models\Transaction;
-use App\Models\Account;
-use Illuminate\Support\Facades\DB;
-use Exception;
 
 class TransactionController extends Controller
 {
-    public function __construct(
-        protected TransactionService $transactionService
-    ) {}
+    public function __construct(protected TransactionService $transactionService) {}
 
-    public function index(Request $request): AnonymousResourceCollection
+    public function index(Request $request)
     {
-        $limit = $request->integer('limit', 10);
-        $transactions = $this->transactionService->getRecentTransactions($request->user(), $limit);
-
-        return TransactionResource::collection($transactions);
+        $filters = $request->validate([
+            'month'=>['nullable','date_format:Y-m'],'from'=>['nullable','date'],'to'=>['nullable','date'],
+            'type'=>['nullable','in:all,income,expense,transfer'],'account_id'=>['nullable'],'category_id'=>['nullable'],
+            'search'=>['nullable','string','max:100'],'limit'=>['nullable','integer','min:1','max:500'],
+        ]);
+        $limit = (int)($filters['limit'] ?? 100);
+        return TransactionResource::collection($this->transactionService->query($request->user(), $filters)->limit($limit)->get());
     }
 
     public function store(StoreTransactionRequest $request): JsonResponse
     {
-        $transaction = $this->transactionService->createTransaction(
-            $request->user(),
-            $request->validated()
-        );
-
-        return response()->json([
-            'message' => 'Transaksi berhasil dicatat.',
-            'data' => new TransactionResource($transaction->load(['account', 'category'])),
-        ], 201);
+        $transaction = $this->transactionService->createTransaction($request->user(), $request->validated());
+        return response()->json(['message'=>'Transaksi berhasil dicatat.','data'=>new TransactionResource($transaction)],201);
     }
-    public function destroy(Transaction $transaction)
+
+    public function show(Request $request, Transaction $transaction): TransactionResource
+    { abort_unless($transaction->user_id === $request->user()->id,403); return new TransactionResource($transaction->load(['account','relatedAccount','category'])); }
+
+    public function update(UpdateTransactionRequest $request, Transaction $transaction): JsonResponse
     {
-        // Pastikan transaksi milik user yang sedang login
-        if ($transaction->user_id !== auth()->id()) {
-            return response()->json(['message' => 'Unauthorized'], 403);
-        }
-
-        try {
-            DB::transaction(function () use ($transaction) {
-                // 1. Revert Saldo Akun Utamanya (jika ada)
-                if ($transaction->account_id) {
-                    $account = Account::find($transaction->account_id);
-                    if ($account) {
-                        if ($transaction->type === 'expense') {
-                            // Pengeluaran dihapus = Saldo bertambah kembali
-                            $account->increment('balance', $transaction->amount);
-                        } elseif ($transaction->type === 'income') {
-                            // Pemasukan dihapus = Saldo berkurang kembali
-                            $account->decrement('balance', $transaction->amount);
-                        } elseif ($transaction->type === 'transfer') {
-                            // Transfer dihapus = Saldo pengirim dikembalikan
-                            $account->increment('balance', $transaction->amount);
-                        }
-                    }
-                }
-
-                // 2. Revert Saldo Akun Tujuan (Khusus Transfer)
-                if ($transaction->type === 'transfer' && $transaction->to_account_id) {
-                    $toAccount = Account::find($transaction->to_account_id);
-                    if ($toAccount) {
-                        $toAccount->decrement('balance', $transaction->amount);
-                    }
-                }
-
-                // 3. Hapus Transaksi dari Database
-                $transaction->delete();
-            });
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Transaksi berhasil dihapus dan saldo diperbarui.'
-            ], 200);
-        } catch (Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Gagal menghapus transaksi: ' . $e->getMessage()
-            ], 500);
-        }
+        $transaction = $this->transactionService->updateTransaction($request->user(), $transaction, $request->validated());
+        return response()->json(['message'=>'Transaksi berhasil diperbarui.','data'=>new TransactionResource($transaction)]);
     }
+
+    public function destroy(Request $request, Transaction $transaction): JsonResponse
+    { $this->transactionService->deleteTransaction($request->user(), $transaction); return response()->json(['success'=>true,'message'=>'Transaksi berhasil dihapus dan saldo diperbarui.']); }
+
+    public function report(Request $request): JsonResponse
+    { $data=$request->validate(['month'=>['required','date_format:Y-m']]); return response()->json(['data'=>$this->transactionService->report($request->user(),$data['month'])]); }
+
+    public function cashFlow(Request $request): JsonResponse
+    { $months=max(1,min($request->integer('months',6),24)); return response()->json(['data'=>$this->transactionService->cashFlow($request->user(),$months)]); }
 }

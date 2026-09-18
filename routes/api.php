@@ -21,7 +21,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('user/profile', [ProfileController::class, 'update']);
     Route::apiResource('accounts', AccountController::class);
     Route::apiResource('categories', CategoryController::class);
-    Route::apiResource('transactions', TransactionController::class)->only(['index', 'store', 'show', 'destroy']);
+    Route::get('reports/monthly', [TransactionController::class, 'report']);
+    Route::get('reports/cash-flow', [TransactionController::class, 'cashFlow']);
+    Route::apiResource('transactions', TransactionController::class)->only(['index', 'store', 'show', 'update', 'destroy']);
     Route::apiResource('budgets', BudgetController::class)->only(['index', 'store', 'destroy']);
     Route::apiResource('goals', GoalController::class);
     Route::post('goals/{goal}/contributions', [GoalController::class, 'addContribution']);

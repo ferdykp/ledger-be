@@ -12,6 +12,9 @@ class TransactionResource extends JsonResource
         return [
             'id' => $this->id,
             'type' => $this->type,
+            'account_id' => $this->account_id,
+            'related_account_id' => $this->related_account_id,
+            'category_id' => $this->category_id,
             'amount' => (float) $this->amount,
             'date' => $this->date?->format('Y-m-d'),
             'note' => $this->note,
