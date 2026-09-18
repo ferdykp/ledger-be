@@ -118,11 +118,8 @@ return [
     |
     */
 
-<<<<<<< HEAD
-=======
     'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
 
->>>>>>> 849c666 (new)
     'maintenance' => [
         'driver' => env('APP_MAINTENANCE_DRIVER', 'file'),
         'store' => env('APP_MAINTENANCE_STORE', 'database'),

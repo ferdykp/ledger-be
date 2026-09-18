@@ -6,21 +6,15 @@ use App\Http\Controllers\BudgetController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\GoalController;
 use App\Http\Controllers\ProfileController;
-<<<<<<< HEAD
-=======
 use App\Http\Controllers\PasswordController;
->>>>>>> 849c666 (new)
 use App\Http\Controllers\TransactionController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
-<<<<<<< HEAD
-=======
 Route::post('/forgot-password', [PasswordController::class, 'forgot'])->middleware('throttle:5,1');
 Route::post('/reset-password', [PasswordController::class, 'reset'])->middleware('throttle:5,1');
->>>>>>> 849c666 (new)
 
 // Route::get('/ping', fn() => response()->json(['message' => 'pong']))->middleware('auth:sanctum');
 Route::middleware('auth:sanctum')->group(function () {
@@ -28,10 +22,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', fn(Request $request) => $request->user());
     Route::post('user/profile', [ProfileController::class, 'update']);
-<<<<<<< HEAD
-=======
     Route::put('user/password', [PasswordController::class, 'change'])->middleware('throttle:5,1');
->>>>>>> 849c666 (new)
     Route::apiResource('accounts', AccountController::class);
     Route::apiResource('categories', CategoryController::class);
     Route::get('reports/monthly', [TransactionController::class, 'report']);
