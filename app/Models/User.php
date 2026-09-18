@@ -8,10 +8,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\HasApiTokens;
-<<<<<<< HEAD
-=======
 use App\Notifications\ResetPasswordNotification;
->>>>>>> 849c666 (new)
 
 class User extends Authenticatable
 {
@@ -33,14 +30,11 @@ class User extends Authenticatable
         return 'https://ui-avatars.com/api/?name=' . urlencode($this->name) . '&background=6C4CF1&color=fff';
     }
 
-<<<<<<< HEAD
-=======
     public function sendPasswordResetNotification($token): void
     {
         $this->notify(new ResetPasswordNotification($token));
     }
 
->>>>>>> 849c666 (new)
     public function accounts()
     {
         return $this->hasMany(Account::class);
