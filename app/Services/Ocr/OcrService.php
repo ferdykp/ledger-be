@@ -12,43 +12,25 @@ class OcrService
     {
         $startedAt = microtime(true);
 
+        $stage = 'preprocess';
+        $timings = [];
         try {
             $prepared = $this->preprocess($path);
-
-            $results = [];
-
-            foreach ([6, 11] as $psm) {
-                try {
-                    $text = $this->runTesseract($prepared, $psm);
-
-                    if ($text !== '') {
-                        $results[] = [
-                            'text' => $text,
-                            'score' => $this->scoreText($text),
-                        ];
-                    }
-                } catch (\Throwable $e) {
-                    Log::warning('OCR attempt failed', [
-                        'psm' => $psm,
-                        'message' => $e->getMessage(),
-                    ]);
-                }
-            }
-
-            usort(
-                $results,
-                fn($a, $b) => $b['score'] <=> $a['score']
-            );
-
-            $text = $results[0]['text'] ?? '';
-
+            $timings['preprocess_ms'] = round((microtime(true) - $startedAt) * 1000);
+            $stage = 'tesseract';
+            $ocrStarted = microtime(true);
+            // One pass only: repeated passes can outlive the HTTP request.
+            $text = $this->runTesseract($prepared);
+            $timings['tesseract_ms'] = round((microtime(true) - $ocrStarted) * 1000);
             if ($text === '') {
-                throw new \RuntimeException(
-                    'Teks tidak berhasil dibaca dari gambar.'
-                );
+                throw new \RuntimeException('Teks tidak berhasil dibaca dari gambar.');
             }
-
+            $stage = 'parse';
             $draft = $this->parse($text);
+
+            Log::info('Ledger OCR completed', $timings + [
+                'processing_ms' => round((microtime(true) - $startedAt) * 1000),
+            ]);
 
             return [
                 'raw_text' => $text,
@@ -62,6 +44,13 @@ class OcrService
                     ),
                 ],
             ];
+        } catch (\Throwable $e) {
+            Log::warning('Ledger OCR stage failed', $timings + [
+                'stage' => $stage,
+                'processing_ms' => round((microtime(true) - $startedAt) * 1000),
+                'exception' => $e::class,
+            ]);
+            throw $e;
         } finally {
             if (
                 isset($prepared) &&
@@ -75,109 +64,54 @@ class OcrService
 
     private function preprocess(string $path): string
     {
-        if (!extension_loaded('gd')) {
-            return $path;
-        }
-
         $info = @getimagesize($path);
-
-        if (!$info) {
-            return $path;
+        if (! $info || $info[0] < 1 || $info[1] < 1) {
+            throw new \RuntimeException('Gambar tidak valid.');
         }
-
-        $mime = $info['mime'] ?? '';
-
-        $image = match ($mime) {
+        // Reject oversized decoded images before GD allocates memory.
+        if ($info[0] * $info[1] > 20_000_000) {
+            throw new \InvalidArgumentException('Resolusi gambar terlalu besar. Crop atau kecilkan gambar hingga maksimal 20 megapiksel.');
+        }
+        if (! extension_loaded('gd')) {
+            throw new \RuntimeException('PHP GD diperlukan untuk preprocessing OCR.');
+        }
+        $image = match ($info['mime'] ?? '') {
             'image/jpeg' => @imagecreatefromjpeg($path),
             'image/png' => @imagecreatefrompng($path),
-            'image/webp' => function_exists('imagecreatefromwebp')
-                ? @imagecreatefromwebp($path)
-                : false,
+            'image/webp' => function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($path) : false,
             default => false,
         };
-
-        if (!$image) {
-            return $path;
+        if (! $image) {
+            throw new \RuntimeException('Gambar tidak dapat dibaca.');
         }
+        $output = null;
+        $resized = null;
+        try {
+            // Bound both dimensions; never enlarge a tall mobile screenshot.
+            $scale = min(1, 2000 / max($info[0], $info[1]));
+            $width = max(1, (int) round($info[0] * $scale));
+            $height = max(1, (int) round($info[1] * $scale));
+            $resized = imagecreatetruecolor($width, $height);
+            imagefill($resized, 0, 0, imagecolorallocate($resized, 255, 255, 255));
+            imagecopyresampled($resized, $image, 0, 0, 0, 0, $width, $height, $info[0], $info[1]);
+            imagefilter($resized, IMG_FILTER_GRAYSCALE);
+            $output = tempnam(sys_get_temp_dir(), 'ledger_ocr_');
+            if ($output === false || ! imagepng($resized, $output, 1)) {
+                throw new \RuntimeException('Gagal menyiapkan gambar OCR.');
+            }
 
-        $width = imagesx($image);
-        $height = imagesy($image);
-
-        /*
-         * Screenshot/foto m-banking sering memiliki dokumen kecil.
-         * Jangan mengecilkan gambar yang sudah kecil.
-         */
-        $targetWidth = min(
-            2200,
-            max(1400, $width)
-        );
-
-        $scale = $targetWidth / $width;
-        $targetHeight = (int) round($height * $scale);
-
-        $resized = imagecreatetruecolor(
-            $targetWidth,
-            $targetHeight
-        );
-
-        imagecopyresampled(
-            $resized,
-            $image,
-            0,
-            0,
-            0,
-            0,
-            $targetWidth,
-            $targetHeight,
-            $width,
-            $height
-        );
-
-        imagefilter($resized, IMG_FILTER_GRAYSCALE);
-
-        imagefilter(
-            $resized,
-            IMG_FILTER_CONTRAST,
-            -35
-        );
-
-        /*
-         * Sharpen ringan.
-         */
-        if (function_exists('imageconvolution')) {
-            $matrix = [
-                [0, -1, 0],
-                [-1, 5, -1],
-                [0, -1, 0],
-            ];
-
-            imageconvolution(
-                $resized,
-                $matrix,
-                1,
-                0
-            );
+            return $output;
+        } catch (\Throwable $e) {
+            if ($output && is_file($output)) {
+                @unlink($output);
+            }
+            throw $e;
+        } finally {
+            imagedestroy($image);
+            if ($resized) {
+                imagedestroy($resized);
+            }
         }
-
-        $tmp = tempnam(
-            sys_get_temp_dir(),
-            'ledger_ocr_'
-        );
-
-        $output = $tmp . '.png';
-
-        @unlink($tmp);
-
-        imagepng(
-            $resized,
-            $output,
-            9
-        );
-
-        imagedestroy($image);
-        imagedestroy($resized);
-
-        return $output;
     }
 
     private function runTesseract(
@@ -206,11 +140,12 @@ class OcrService
         /*
          * Tidak boleh membuat request menggantung.
          */
-        $process->setTimeout(12);
+        $process->setEnv(['OMP_THREAD_LIMIT' => '1']);
+        $process->setTimeout(max(1, min(20, (float) config('services.ocr.timeout', 15))));
 
         $process->run();
 
-        if (!$process->isSuccessful()) {
+        if (! $process->isSuccessful()) {
             throw new \RuntimeException(
                 trim($process->getErrorOutput())
                     ?: 'Tesseract gagal memproses gambar.'
@@ -220,41 +155,11 @@ class OcrService
         return trim($process->getOutput());
     }
 
-    private function scoreText(string $text): int
-    {
-        $score = strlen($text);
-
-        $keywords = [
-            'total',
-            'bayar',
-            'amount',
-            'nominal',
-            'idr',
-            'rp',
-            'tanggal',
-            'date',
-            'referensi',
-            'reference',
-            'transaksi',
-            'pembayaran',
-        ];
-
-        $lower = strtolower($text);
-
-        foreach ($keywords as $keyword) {
-            if (str_contains($lower, $keyword)) {
-                $score += 100;
-            }
-        }
-
-        return $score;
-    }
-
     private function parse(string $text): array
     {
         $normalized = preg_replace(
             "/[ \t]+/",
-            " ",
+            ' ',
             $text
         );
 
@@ -343,7 +248,7 @@ class OcrService
             }
         }
 
-        if (!$candidates) {
+        if (! $candidates) {
             return null;
         }
 
@@ -356,7 +261,7 @@ class OcrService
 
     private function extractMoney(string $value): ?float
     {
-        if (!preg_match(
+        if (! preg_match(
             '/(?:IDR|RP)?\s*([0-9][0-9.,]*)/i',
             $value,
             $match
@@ -485,7 +390,7 @@ class OcrService
                 if (str_contains($lower, $keyword)) {
                     $merchant = trim(
                         preg_replace(
-                            '/^.*?' . preg_quote($keyword, '/') . '\s*:?\s*/i',
+                            '/^.*?'.preg_quote($keyword, '/').'\s*:?\s*/i',
                             '',
                             $line
                         )
@@ -573,19 +478,19 @@ class OcrService
     ): float {
         $score = 0;
 
-        if (!empty($draft['amount'])) {
+        if (! empty($draft['amount'])) {
             $score += 0.40;
         }
 
-        if (!empty($draft['date'])) {
+        if (! empty($draft['date'])) {
             $score += 0.20;
         }
 
-        if (!empty($draft['merchant'])) {
+        if (! empty($draft['merchant'])) {
             $score += 0.15;
         }
 
-        if (!empty($draft['reference_number'])) {
+        if (! empty($draft['reference_number'])) {
             $score += 0.15;
         }
 

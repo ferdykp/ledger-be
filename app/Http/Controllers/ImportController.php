@@ -7,6 +7,9 @@ use App\Services\Ocr\OcrService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
 
 class ImportController extends Controller
 {
@@ -25,18 +28,17 @@ class ImportController extends Controller
             ],
         ]);
 
+        $requestId = (string) Str::uuid();
+        Log::withContext(['ocr_request_id' => $requestId]);
         $file = $request->file('document');
 
-        $path = $file->store(
-            'transaction-imports',
-            'private'
-        );
-
-        $absolute = storage_path(
-            'app/private/' . $path
-        );
+        $path = null;
+        $completed = false;
+        Log::info('Ledger OCR received', ['bytes' => $file->getSize()]);
 
         try {
+            $path = $file->store('transaction-imports', 'private');
+            $absolute = Storage::disk('private')->path($path);
             $parsed = $this->ocr->extract($absolute);
 
             $import = TransactionImport::create([
@@ -48,6 +50,8 @@ class ImportController extends Controller
                 'processed_at' => now(),
             ]);
 
+            $completed = true;
+
             return response()->json([
                 'message' => 'Bukti berhasil dibaca.',
                 'data' => [
@@ -57,17 +61,19 @@ class ImportController extends Controller
                     'confidence' => $parsed['confidence'],
                 ],
             ], 201);
-        } catch (\Symfony\Component\Process\Exception\ProcessTimedOutException $e) {
+        } catch (ProcessTimedOutException $e) {
             Log::warning('Ledger OCR timeout', [
                 'user_id' => $request->user()->id,
                 'file' => $path,
             ]);
 
             return response()->json([
-                'message' =>
-                'OCR membutuhkan waktu terlalu lama. Coba gunakan screenshot yang lebih jelas atau crop bagian bukti transaksi.',
+                'message' => 'OCR membutuhkan waktu terlalu lama. Coba gunakan screenshot yang lebih jelas atau crop bagian bukti transaksi.',
                 'code' => 'OCR_TIMEOUT',
+                'request_id' => $requestId,
             ], 422);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage(), 'code' => 'OCR_IMAGE_TOO_LARGE'], 422);
         } catch (\Throwable $e) {
             Log::error('Ledger OCR failed', [
                 'user_id' => $request->user()->id,
@@ -76,10 +82,14 @@ class ImportController extends Controller
             ]);
 
             return response()->json([
-                'message' =>
-                'Bukti belum berhasil dibaca. Coba lagi atau gunakan gambar yang lebih jelas.',
+                'message' => 'Bukti belum berhasil dibaca. Coba lagi atau gunakan gambar yang lebih jelas.',
                 'code' => 'OCR_FAILED',
+                'request_id' => $requestId,
             ], 422);
+        } finally {
+            if (! $completed && $path) {
+                Storage::disk('private')->delete($path);
+            }
         }
     }
 }
