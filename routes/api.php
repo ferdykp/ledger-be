@@ -32,7 +32,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('transactions', TransactionController::class)->only(['index', 'store', 'show', 'update', 'destroy']);
     Route::post('imports/scan', [ImportController::class, 'scan'])->middleware('throttle:20,1');
     Route::apiResource('budgets', BudgetController::class)->only(['index', 'store', 'destroy']);
-    Route::apiResource('bills', BillController::class)->only(['index','store','update','destroy']);
+    Route::apiResource('bills', BillController::class)->only(['index', 'store', 'update', 'destroy']);
     Route::post('bills/{bill}/paid', [BillController::class, 'markPaid']);
     Route::apiResource('goals', GoalController::class);
     Route::post('goals/{goal}/contributions', [GoalController::class, 'addContribution']);
