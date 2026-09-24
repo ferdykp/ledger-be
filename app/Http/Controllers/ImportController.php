@@ -1,0 +1,4 @@
+<?php
+namespace App\Http\Controllers;
+use App\Models\TransactionImport; use App\Services\Ocr\OcrService; use Illuminate\Http\Request; use Illuminate\Http\JsonResponse;
+class ImportController extends Controller { public function __construct(private OcrService $ocr){} public function scan(Request $r):JsonResponse{$r->validate(['document'=>['required','image','mimes:jpg,jpeg,png,webp','max:10240']]);$path=$r->file('document')->store('transaction-imports','private');$absolute=storage_path('app/private/'.$path);$parsed=$this->ocr->extract($absolute);$import=TransactionImport::create(['user_id'=>$r->user()->id,'file_path'=>$path,'ocr_raw_text'=>$parsed['raw_text'],'parsed_data'=>$parsed['draft'],'confidence'=>$parsed['confidence'],'processed_at'=>now()]);return response()->json(['data'=>['id'=>$import->id,'raw_text'=>$parsed['raw_text'],'draft'=>$parsed['draft'],'confidence'=>$parsed['confidence']]],201);} }

@@ -5,6 +5,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BudgetController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\GoalController;
+use App\Http\Controllers\ImportController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PasswordController;
 use App\Http\Controllers\TransactionController;
@@ -28,6 +29,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('reports/monthly', [TransactionController::class, 'report']);
     Route::get('reports/cash-flow', [TransactionController::class, 'cashFlow']);
     Route::apiResource('transactions', TransactionController::class)->only(['index', 'store', 'show', 'update', 'destroy']);
+    Route::post('imports/scan', [ImportController::class, 'scan'])->middleware('throttle:20,1');
     Route::apiResource('budgets', BudgetController::class)->only(['index', 'store', 'destroy']);
     Route::apiResource('goals', GoalController::class);
     Route::post('goals/{goal}/contributions', [GoalController::class, 'addContribution']);
