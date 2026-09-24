@@ -1,0 +1,3 @@
+<?php
+use Illuminate\Database\Migrations\Migration;use Illuminate\Database\Schema\Blueprint;use Illuminate\Support\Facades\Schema;
+return new class extends Migration{public function up():void{Schema::create('bills',function(Blueprint $t){$t->id();$t->foreignId('user_id')->constrained()->cascadeOnDelete();$t->string('name');$t->decimal('amount',18,2)->default(0);$t->date('due_date');$t->enum('frequency',['once','weekly','monthly','yearly'])->default('monthly');$t->enum('status',['active','paid','paused'])->default('active');$t->string('category')->nullable();$t->text('note')->nullable();$t->boolean('reminder_enabled')->default(true);$t->timestamps();$t->index(['user_id','due_date']);});}public function down():void{Schema::dropIfExists('bills');}};

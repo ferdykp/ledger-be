@@ -55,4 +55,6 @@ class User extends Authenticatable
     {
         return $this->hasMany(Goal::class);
     }
+
+    public function bills() { return $this->hasMany(\App\Models\Bill::class); }
 }
