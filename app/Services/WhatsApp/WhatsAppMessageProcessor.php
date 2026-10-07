@@ -1,0 +1,23 @@
+<?php
+namespace App\Services\WhatsApp;
+use App\Models\{ConversationSession,WhatsAppConnection,WhatsAppPairingCode,User};
+use App\Services\AI\GroqParser;
+use App\Services\QuickAdd\QuickAddParser;
+use App\Services\TransactionService;
+use Illuminate\Support\Facades\Hash;
+class WhatsAppMessageProcessor {
+ public function __construct(private QuickAddParser $parser,private GroqParser $groq,private EvolutionProvider $provider,private TransactionService $transactions){}
+ public function handle(string $phone,string $text): void { $text=trim($text); if(preg_match('/^LINK\s+(\d{6})$/i',$text,$m)){ $this->link($phone,$m[1]); return; } $conn=WhatsAppConnection::with('user')->where('phone_number',$phone)->where('status','connected')->first(); if(!$conn){$this->provider->sendText($phone,'Nomor ini belum terhubung ke Ledger. Buka Settings > WhatsApp di Ledger untuk membuat kode pairing.');return;} $conn->update(['last_message_at'=>now()]); $session=ConversationSession::firstOrCreate(['user_id'=>$conn->user_id],['channel'=>'whatsapp','state'=>'idle']); if($session->expires_at && $session->expires_at->isPast()){$session->update(['state'=>'idle','context'=>null,'expires_at'=>null]);} if($session->state==='waiting_confirmation'){ $this->confirmation($conn->user,$session,$text,$phone); return; } $draft=$this->parser->parse($conn->user,$text); if($draft['confidence']<0.75 || count($draft['missing'])) $draft=$this->mergeAi($conn->user,$draft,$text); if(!$draft['amount']||!$draft['account_id']||($draft['type']==='transfer'&&!$draft['related_account_id'])){$this->provider->sendText($phone,"Saya belum bisa memastikan nominal atau akun. Coba format seperti:
+• bensin 50rb bca
+• makan 35k gopay
+• gaji 8jt masuk bca");return;} $session->update(['state'=>'waiting_confirmation','context'=>$draft,'expires_at'=>now()->addMinutes(30)]); $cat=$draft['category_name']?:'Tanpa kategori'; $this->provider->sendText($phone,"Konfirmasi transaksi:
+".strtoupper($draft['type'])." • Rp".number_format($draft['amount'],0,',','.')."
+{$draft['account_name']} • {$cat}
+{$draft['note']}
+
+Balas 1 / CONFIRM untuk simpan, atau 3 / CANCEL untuk batal."); }
+ private function confirmation(User $user,ConversationSession $s,string $text,string $phone): void { if(in_array(strtolower($text),['3','cancel','batal'])){$s->update(['state'=>'idle','context'=>null,'expires_at'=>null]);$this->provider->sendText($phone,'Transaksi dibatalkan.');return;} if(!in_array(strtolower($text),['1','confirm','konfirmasi','ya','yes'])){$this->provider->sendText($phone,'Balas 1 / CONFIRM untuk simpan atau 3 / CANCEL untuk batal.');return;} $d=$s->context; $tx=$this->transactions->createTransaction($user,['type'=>$d['type'],'account_id'=>$d['account_id'],'to_account_id'=>$d['related_account_id']??null,'related_account_id'=>$d['related_account_id']??null,'category_id'=>$d['category_id']??null,'amount'=>$d['amount'],'note'=>$d['note']??null,'date'=>$d['date']??now()->toDateString()]); $s->update(['state'=>'idle','context'=>null,'expires_at'=>null]); $this->provider->sendText($phone,'✅ Tersimpan: '.strtoupper($tx->type).' Rp'.number_format($tx->amount,0,',','.').' • '.$tx->account->name); }
+ private function link(string $phone,string $code): void { $rows=WhatsAppPairingCode::whereNull('used_at')->where('expires_at','>',now())->latest()->limit(50)->get(); $pair=$rows->first(fn($p)=>Hash::check($code,$p->code_hash)); if(!$pair){$this->provider->sendText($phone,'Kode pairing tidak valid atau sudah kedaluwarsa.');return;} WhatsAppConnection::updateOrCreate(['user_id'=>$pair->user_id],['phone_number'=>$phone,'provider'=>'evolution','status'=>'connected','verified_at'=>now()]); $pair->update(['used_at'=>now()]); $this->provider->sendText($phone,"✅ WhatsApp terhubung ke Ledger.
+Coba: bensin 50rb bca"); }
+ private function mergeAi(User $u,array $draft,string $text): array { $ai=$this->groq->parse($u,$text); if(!$ai)return $draft; if(!$draft['amount'] && is_numeric($ai['amount']??null))$draft['amount']=(float)$ai['amount']; if(!$draft['account_id'] && !empty($ai['account_name'])){ $a=$u->accounts()->whereRaw('LOWER(name)=?',[strtolower($ai['account_name'])])->first(); if($a){$draft['account_id']=$a->id;$draft['account_name']=$a->name;} } if(!$draft['category_id'] && !empty($ai['category_name'])){ $c=$u->categories()->where('type',$draft['type'])->whereRaw('LOWER(name)=?',[strtolower($ai['category_name'])])->first(); if($c){$draft['category_id']=$c->id;$draft['category_name']=$c->name;} } if(in_array($ai['type']??null,['income','expense']))$draft['type']=$ai['type']; if(!empty($ai['note']))$draft['note']=$ai['note']; $draft['source']='rule+groq'; return $draft; }
+}

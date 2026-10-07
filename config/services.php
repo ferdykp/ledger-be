@@ -35,6 +35,18 @@ return [
         ],
     ],
 
+    'groq' => [
+        'key' => env('GROQ_API_KEY'),
+        'model' => env('GROQ_MODEL', 'openai/gpt-oss-20b'),
+    ],
+
+    'evolution' => [
+        'url' => env('EVOLUTION_API_URL'),
+        'key' => env('EVOLUTION_API_KEY'),
+        'instance' => env('EVOLUTION_INSTANCE', 'ledger'),
+        'webhook_secret' => env('EVOLUTION_WEBHOOK_SECRET'),
+    ],
+
     'ocr' => [
         'tesseract_binary' => env('TESSERACT_BINARY', 'tesseract'),
         'timeout' => env('OCR_TIMEOUT', 15),

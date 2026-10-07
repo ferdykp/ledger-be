@@ -2,19 +2,15 @@
 
 namespace App\Services;
 
-// artinya class ini berada di app/Services/AuthService.php
-// laravel menggunakan namespace untuk mengetahui lokasi class
 
 use App\Models\User;
-// mengambil model User agar dapat menggunakan create dan where
 use Illuminate\Support\Facades\Hash;
-// digunakan untuk hashing password (enkripsi)
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\PersonalAccessToken;
 
 class AuthServices
 {
-    public function register(array $data): array // artinya method menerima array $data dan mengembalikan array
+    public function register(array $data): array
     {
         $user = User::create([
             'name' => $data['name'],
@@ -23,7 +19,6 @@ class AuthServices
         ]);
 
         $token = $user->createToken('auth-token')->plainTextToken;
-        // laravel membuat token yang nantinya akan di kirim ke frontend
 
         return [
             'user' => $user,
@@ -40,7 +35,6 @@ class AuthServices
                 'email' => ['Email atau password salah'],
             ]);
         }
-        // ini merupakan proses cek dengan 2 kondisi yaitu user tidak di temukan atau password salah
 
         $token = $user->createToken('auth-token')->plainTextToken;
 
@@ -57,6 +51,5 @@ class AuthServices
         if ($token instanceof PersonalAccessToken) {
             $token->delete();
         }
-        // ini akan menghapus token yang sedang digunakan
     }
 }

@@ -10,6 +10,8 @@ use App\Http\Controllers\ImportController;
 use App\Http\Controllers\PasswordController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\TransactionController;
+use App\Http\Controllers\WhatsAppIntegrationController;
+use App\Http\Controllers\Webhooks\WhatsAppWebhookController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -19,8 +21,13 @@ Route::post('/forgot-password', [PasswordController::class, 'forgot'])->middlewa
 Route::post('/reset-password', [PasswordController::class, 'reset'])->middleware('throttle:5,1');
 
 // Route::get('/ping', fn() => response()->json(['message' => 'pong']))->middleware('auth:sanctum');
+Route::post('/webhooks/whatsapp', WhatsAppWebhookController::class)->middleware('throttle:120,1');
+
 Route::middleware('auth:sanctum')->group(function () {
 
+    Route::get('/integrations/whatsapp', [WhatsAppIntegrationController::class, 'status']);
+    Route::post('/integrations/whatsapp/pairing', [WhatsAppIntegrationController::class, 'pairing'])->middleware('throttle:5,1');
+    Route::delete('/integrations/whatsapp', [WhatsAppIntegrationController::class, 'disconnect']);
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', fn (Request $request) => $request->user());
     Route::post('user/profile', [ProfileController::class, 'update']);

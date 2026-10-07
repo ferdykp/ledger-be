@@ -16,7 +16,7 @@ class GoalController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $goals = Goal::where('user_id', $request->user()->id)
-            ->with(['contributions' => fn($q) => $q->orderBy('date', 'desc')])
+            ->with(['contributions' => fn ($q) => $q->orderBy('date', 'desc')])
             ->orderBy('created_at', 'desc')
             ->get();
 
@@ -46,7 +46,7 @@ class GoalController extends Controller
         $this->authorizeOwner($request->user()->id, $goal);
 
         return response()->json([
-            'data' => new GoalResource($goal->load(['contributions' => fn($q) => $q->orderBy('date', 'desc')])),
+            'data' => new GoalResource($goal->load(['contributions' => fn ($q) => $q->orderBy('date', 'desc')])),
         ]);
     }
 
@@ -54,7 +54,7 @@ class GoalController extends Controller
     {
         $this->authorizeOwner($request->user()->id, $goal);
 
-        $goal->update($request->validated());
+        $goal->update($request->safe()->except('current_amount'));
 
         return response()->json([
             'message' => 'Impian tabungan berhasil diperbarui.',
@@ -79,6 +79,7 @@ class GoalController extends Controller
         $validated = $request->validated();
 
         DB::transaction(function () use ($goal, $validated) {
+            $goal = Goal::lockForUpdate()->findOrFail($goal->id);
             $goal->contributions()->create([
                 'amount' => $validated['amount'],
                 'date' => $validated['date'],

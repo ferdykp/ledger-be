@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\UpdateProfileRequest;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
 class ProfileController extends Controller
@@ -14,17 +13,19 @@ class ProfileController extends Controller
         $user = $request->user();
         $data = $request->validated();
 
-        if ($request->hasFile('avatar')) {
-            // Hapus avatar lama jika ada
-            if ($user->avatar && Storage::disk('public')->exists($user->avatar)) {
-                Storage::disk('public')->delete($user->avatar);
+        $oldAvatar = $user->avatar;
+        $newAvatar = null;
+        try {
+            if ($request->hasFile('avatar')) {
+                $newAvatar = $request->file('avatar')->store('avatars', 'public');
+                $data['avatar'] = $newAvatar;
             }
-
-            // Simpan avatar baru ke folder public/avatars
-            $data['avatar'] = $request->file('avatar')->store('avatars', 'public');
+            $user->update($data);
+        } catch (\Throwable $error) {
+            if ($newAvatar) Storage::disk('public')->delete($newAvatar);
+            throw $error;
         }
-
-        $user->update($data);
+        if ($newAvatar && $oldAvatar) Storage::disk('public')->delete($oldAvatar);
 
         return response()->json([
             'message' => 'Profil berhasil diperbarui.',

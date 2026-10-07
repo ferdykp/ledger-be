@@ -38,7 +38,10 @@ class Goal extends Model
 
     public function getProgressPercentAttribute(): float
     {
-        if ($this->target_amount <= 0) return 0.0;
+        if ($this->target_amount <= 0) {
+            return 0.0;
+        }
+
         return min(100, round(($this->current_amount / $this->target_amount) * 100, 1));
     }
 }

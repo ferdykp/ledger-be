@@ -8,14 +8,13 @@ use App\Services\AuthServices;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
-
 class AuthController extends Controller
 {
     public function __construct(
         private AuthServices $authService
     ) {}
-    # laravel akan otomatis memberikan AuthServices (authService)
-    # ini disebut dengan Dependency Injection
+    // laravel akan otomatis memberikan AuthServices (authService)
+    // ini disebut dengan Dependency Injection
 
     public function register(RegisterRequest $request): JsonResponse
     {
@@ -25,7 +24,7 @@ class AuthController extends Controller
 
         return response()->json([
             'message' => 'Registrasi Berhasil',
-            'data' => $result
+            'data' => $result,
         ], 201);
     }
 
@@ -37,7 +36,7 @@ class AuthController extends Controller
 
         return response()->json([
             'message' => 'Login Berhasil',
-            'data' => $result
+            'data' => $result,
         ]);
     }
 
@@ -48,7 +47,7 @@ class AuthController extends Controller
         );
 
         return response()->json([
-            'message' => 'Logout Berhasil'
+            'message' => 'Logout Berhasil',
         ]);
     }
 

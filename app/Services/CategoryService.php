@@ -11,7 +11,7 @@ class CategoryService
     public function getUserCategories(User $user, ?string $type = null): Collection
     {
         return Category::where('user_id', $user->id)
-            ->when($type, fn($query) => $query->where('type', $type))
+            ->when($type, fn ($query) => $query->where('type', $type))
             ->whereNull('parent_id')
             ->with('children')
             ->orderBy('name', 'asc')
@@ -32,6 +32,7 @@ class CategoryService
     public function updateCategory(Category $category, array $data): Category
     {
         $category->update($data);
+
         return $category->fresh();
     }
 
