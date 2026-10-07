@@ -18,7 +18,7 @@ class UpdateAccountRequest extends FormRequest
         return [
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'type' => ['sometimes', 'required', Rule::in(['cash', 'bank', 'ewallet', 'credit_card'])],
-            'balance' => ['sometimes', 'numeric'],
+            'balance' => ['sometimes', 'numeric', 'decimal:0,2', 'between:-9999999999999.99,9999999999999.99'],
             'color' => ['nullable', 'string', 'regex:/^#([a-fA-F0-9]{6})$/'],
             'icon' => ['nullable', 'string', 'max:255'],
             'is_archived' => ['nullable', 'boolean'],

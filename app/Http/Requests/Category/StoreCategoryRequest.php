@@ -19,7 +19,7 @@ class StoreCategoryRequest extends FormRequest
             'type' => ['required', Rule::in(['income', 'expense'])],
             'icon' => ['nullable', 'string', 'max:255'],
             'color' => ['nullable', 'string', 'regex:/^#([a-fA-F0-9]{6})$/'],
-            'parent_id' => ['nullable', Rule::exists('categories', 'id')->where('user_id', $this->user()->id)],
+            'parent_id' => ['nullable', Rule::exists('categories', 'id')->where('user_id', $this->user()->id)->where('type', $this->input('type', $this->route('category')?->type))],
         ];
     }
 }

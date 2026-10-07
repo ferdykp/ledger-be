@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Controllers;
 
 use App\Http\Requests\Transaction\StoreTransactionRequest;
@@ -16,35 +17,76 @@ class TransactionController extends Controller
     public function index(Request $request)
     {
         $filters = $request->validate([
-            'month'=>['nullable','date_format:Y-m'],'from'=>['nullable','date'],'to'=>['nullable','date'],
-            'type'=>['nullable','in:all,income,expense,transfer'],'account_id'=>['nullable'],'category_id'=>['nullable'],
-            'search'=>['nullable','string','max:100'],'limit'=>['nullable','integer','min:1','max:500'],
+            'month' => ['nullable', 'date_format:Y-m'], 'from' => ['nullable', 'date'], 'to' => ['nullable', 'date'],
+            'type' => ['nullable', 'in:all,income,expense,transfer'], 'account_id' => ['nullable'], 'category_id' => ['nullable'],
+            'page' => ['nullable', 'integer', 'min:1'], 'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'search' => ['nullable', 'string', 'max:100'], 'limit' => ['nullable', 'integer', 'min:1', 'max:500'],
         ]);
-        $limit = (int)($filters['limit'] ?? 100);
+        if ($request->has('page')) {
+            return TransactionResource::collection($this->transactionService->query($request->user(), $filters)->paginate($filters['per_page'] ?? 50));
+        }
+        $limit = (int) ($filters['limit'] ?? 100);
+
         return TransactionResource::collection($this->transactionService->query($request->user(), $filters)->limit($limit)->get());
+    }
+
+    public function export(Request $request)
+    {
+        return response()->streamDownload(function () use ($request) {
+            $stream = fopen('php://output', 'w');
+            fwrite($stream, "\xEF\xBB\xBF");
+            fputcsv($stream, ['Tanggal', 'Jenis', 'Akun', 'Akun tujuan', 'Kategori', 'Nominal', 'Catatan'], ',', '"', '');
+            $safe = static function ($value) {
+                $value = (string) ($value ?? '');
+
+                return preg_match('/^[\s]*[=+@\-]/u', $value) ? "'".$value : $value;
+            };
+            foreach ($this->transactionService->query($request->user())->lazy(500) as $tx) {
+                fputcsv($stream, array_map($safe, [$tx->date->format('Y-m-d'), $tx->type, $tx->account?->name, $tx->relatedAccount?->name, $tx->category?->name, $tx->amount, $tx->note]), ',', '"', '');
+            }
+            fclose($stream);
+        }, 'ledger-transactions.csv', ['Content-Type' => 'text/csv; charset=UTF-8']);
     }
 
     public function store(StoreTransactionRequest $request): JsonResponse
     {
         $transaction = $this->transactionService->createTransaction($request->user(), $request->validated());
-        return response()->json(['message'=>'Transaksi berhasil dicatat.','data'=>new TransactionResource($transaction)],201);
+
+        return response()->json(['message' => 'Transaksi berhasil dicatat.', 'data' => new TransactionResource($transaction)], 201);
     }
 
     public function show(Request $request, Transaction $transaction): TransactionResource
-    { abort_unless($transaction->user_id === $request->user()->id,403); return new TransactionResource($transaction->load(['account','relatedAccount','category'])); }
+    {
+        abort_unless($transaction->user_id === $request->user()->id, 403);
+
+        return new TransactionResource($transaction->load(['account', 'relatedAccount', 'category']));
+    }
 
     public function update(UpdateTransactionRequest $request, Transaction $transaction): JsonResponse
     {
         $transaction = $this->transactionService->updateTransaction($request->user(), $transaction, $request->validated());
-        return response()->json(['message'=>'Transaksi berhasil diperbarui.','data'=>new TransactionResource($transaction)]);
+
+        return response()->json(['message' => 'Transaksi berhasil diperbarui.', 'data' => new TransactionResource($transaction)]);
     }
 
     public function destroy(Request $request, Transaction $transaction): JsonResponse
-    { $this->transactionService->deleteTransaction($request->user(), $transaction); return response()->json(['success'=>true,'message'=>'Transaksi berhasil dihapus dan saldo diperbarui.']); }
+    {
+        $this->transactionService->deleteTransaction($request->user(), $transaction);
+
+        return response()->json(['success' => true, 'message' => 'Transaksi berhasil dihapus dan saldo diperbarui.']);
+    }
 
     public function report(Request $request): JsonResponse
-    { $data=$request->validate(['month'=>['required','date_format:Y-m']]); return response()->json(['data'=>$this->transactionService->report($request->user(),$data['month'])]); }
+    {
+        $data = $request->validate(['month' => ['required', 'date_format:Y-m']]);
+
+        return response()->json(['data' => $this->transactionService->report($request->user(), $data['month'])]);
+    }
 
     public function cashFlow(Request $request): JsonResponse
-    { $months=max(1,min($request->integer('months',6),24)); return response()->json(['data'=>$this->transactionService->cashFlow($request->user(),$months)]); }
+    {
+        $months = max(1, min($request->integer('months', 6), 24));
+
+        return response()->json(['data' => $this->transactionService->cashFlow($request->user(), $months)]);
+    }
 }

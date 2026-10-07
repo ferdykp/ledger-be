@@ -9,13 +9,15 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
 
 class BudgetController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
+        $request->validate(['month' => ['nullable', 'date_format:Y-m']]);
         $month = $request->query('month', now()->format('Y-m'));
-        $startDate = Carbon::parse($month . '-01')->startOfMonth();
+        $startDate = Carbon::parse($month.'-01')->startOfMonth();
 
         $budgets = Budget::with('category')
             ->where('user_id', $request->user()->id)
@@ -30,18 +32,23 @@ class BudgetController extends Controller
         $validated = $request->validated();
         $startDate = Carbon::parse($validated['start_date'])->startOfMonth()->format('Y-m-d');
 
-        // Upsert budget jika sudah pernah diset untuk kategori & bulan yang sama
-        $budget = Budget::updateOrCreate(
-            [
+        $budget = DB::transaction(function () use ($request, $validated, $startDate) {
+            // Serialize upserts for this owner; date casts may include midnight in SQLite.
+            $request->user()->newQuery()->whereKey($request->user()->id)->lockForUpdate()->firstOrFail();
+            $identity = [
                 'user_id' => $request->user()->id,
                 'category_id' => $validated['category_id'],
                 'period' => $validated['period'] ?? 'monthly',
-                'start_date' => $startDate,
-            ],
-            [
-                'amount_limit' => $validated['amount_limit'],
-            ]
-        );
+            ];
+            $budget = Budget::where($identity)->whereDate('start_date', $startDate)->first();
+            if ($budget) {
+                $budget->update(['amount_limit' => $validated['amount_limit']]);
+
+                return $budget;
+            }
+
+            return Budget::create([...$identity, 'start_date' => $startDate, 'amount_limit' => $validated['amount_limit']]);
+        });
 
         return response()->json([
             'message' => 'Budget berhasil disimpan.',

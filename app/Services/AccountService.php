@@ -3,15 +3,18 @@
 namespace App\Services;
 
 use App\Models\Account;
+use App\Models\Transaction;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class AccountService
 {
     public function getUserAccounts(User $user, bool $includeArchived = false): Collection
     {
         return Account::where('user_id', $user->id)
-            ->when(!$includeArchived, fn($query) => $query->where('is_archived', false))
+            ->when(! $includeArchived, fn ($query) => $query->where('is_archived', false))
             ->orderBy('created_at', 'desc')
             ->get();
     }
@@ -30,11 +33,21 @@ class AccountService
     public function updateAccount(Account $account, array $data): Account
     {
         $account->update($data);
+
         return $account->fresh();
     }
 
     public function deleteAccount(Account $account): bool
     {
-        return $account->delete();
+        return DB::transaction(function () use ($account) {
+            $account = Account::lockForUpdate()->findOrFail($account->id);
+            if (Transaction::where('account_id', $account->id)->orWhere('related_account_id', $account->id)->exists()) {
+                throw ValidationException::withMessages([
+                    'account' => 'Akun memiliki riwayat transaksi dan tidak dapat dihapus. Arsipkan akun untuk menyembunyikannya.',
+                ]);
+            }
+
+            return $account->delete();
+        });
     }
 }

@@ -24,7 +24,7 @@ class UpdateProfileRequest extends FormRequest
                 Rule::unique('users', 'email')->ignore($this->user()->id),
             ],
             'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,gif,webp', 'max:2048'],
-            'currency' => ['nullable', 'string', 'max:3'],
+            'currency' => ['sometimes', 'required', Rule::in(['IDR', 'USD'])],
             'theme' => ['nullable', Rule::in(['light', 'dark', 'system'])],
         ];
     }

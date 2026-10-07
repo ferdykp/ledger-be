@@ -2,10 +2,10 @@
 
 namespace App\Models;
 
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Carbon\Carbon;
 
 class Budget extends Model
 {
@@ -37,22 +37,27 @@ class Budget extends Model
     // Hitung realisasi pengeluaran dalam rentang bulan budget
     public function getSpentAmountAttribute(): float
     {
-        if (!$this->category_id) return 0.0;
+        if (! $this->category_id) {
+            return 0.0;
+        }
 
         $startDate = Carbon::parse($this->start_date)->startOfMonth();
-        $endDate = $startDate->copy()->endOfMonth();
+        $endDate = $this->period === 'yearly' ? $startDate->copy()->addYear()->subDay() : $startDate->copy()->endOfMonth();
 
         return (float) Transaction::where('user_id', $this->user_id)
             ->where('category_id', $this->category_id)
             ->where('type', 'expense')
-            ->whereBetween('date', [$startDate, $endDate])
+            ->whereBetween('date', [$startDate->toDateString(), $endDate->toDateString()])
             ->sum('amount');
     }
 
     // Persentase penggunaan (0% - >100%)
     public function getPercentageAttribute(): float
     {
-        if ($this->amount_limit <= 0) return 0.0;
+        if ($this->amount_limit <= 0) {
+            return 0.0;
+        }
+
         return round(($this->spent_amount / $this->amount_limit) * 100, 1);
     }
 
@@ -62,10 +67,11 @@ class Budget extends Model
         $percentage = $this->percentage;
 
         if ($percentage >= 100) {
-            return 'danger';   # Red / Overbudget (#F0473E)
+            return 'danger';   // Red / Overbudget (#F0473E)
         } elseif ($percentage >= 80) {
-            return 'warning';  # Amber / Warning (#FFB020)
+            return 'warning';  // Amber / Warning (#FFB020)
         }
-        return 'safe';         # Green/Violet / Safe (#17B978 / #6C4CF1)
+
+        return 'safe';         // Green/Violet / Safe (#17B978 / #6C4CF1)
     }
 }

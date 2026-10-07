@@ -16,19 +16,27 @@ class TransactionService
         $query = Transaction::with(['account', 'relatedAccount', 'category'])
             ->where('user_id', $user->id);
 
-        if (!empty($filters['month'])) {
+        if (! empty($filters['month'])) {
             [$year, $month] = array_map('intval', explode('-', $filters['month']));
             $query->whereYear('date', $year)->whereMonth('date', $month);
         }
-        if (!empty($filters['from'])) $query->whereDate('date', '>=', $filters['from']);
-        if (!empty($filters['to'])) $query->whereDate('date', '<=', $filters['to']);
-        if (!empty($filters['type']) && $filters['type'] !== 'all') $query->where('type', $filters['type']);
-        if (!empty($filters['account_id']) && $filters['account_id'] !== 'all') {
+        if (! empty($filters['from'])) {
+            $query->whereDate('date', '>=', $filters['from']);
+        }
+        if (! empty($filters['to'])) {
+            $query->whereDate('date', '<=', $filters['to']);
+        }
+        if (! empty($filters['type']) && $filters['type'] !== 'all') {
+            $query->where('type', $filters['type']);
+        }
+        if (! empty($filters['account_id']) && $filters['account_id'] !== 'all') {
             $accountId = $filters['account_id'];
             $query->where(fn ($q) => $q->where('account_id', $accountId)->orWhere('related_account_id', $accountId));
         }
-        if (!empty($filters['category_id']) && $filters['category_id'] !== 'all') $query->where('category_id', $filters['category_id']);
-        if (!empty($filters['search'])) {
+        if (! empty($filters['category_id']) && $filters['category_id'] !== 'all') {
+            $query->where('category_id', $filters['category_id']);
+        }
+        if (! empty($filters['search'])) {
             $search = trim($filters['search']);
             $query->where(function ($q) use ($search) {
                 $q->where('note', 'like', "%{$search}%")
@@ -44,6 +52,7 @@ class TransactionService
     public function createTransaction(User $user, array $data): Transaction
     {
         return DB::transaction(function () use ($user, $data) {
+            $this->lockAccounts($user, [$data['account_id'], $data['to_account_id'] ?? null]);
             $account = $this->lockAccount($user, (int) $data['account_id']);
             $related = $data['type'] === 'transfer'
                 ? $this->lockAccount($user, (int) ($data['related_account_id'] ?? $data['to_account_id']))
@@ -60,7 +69,7 @@ class TransactionService
                 'note' => $data['note'] ?? null,
                 'date' => $data['date'],
             ])->load(['account', 'relatedAccount', 'category']);
-        });
+        }, 3);
     }
 
     public function updateTransaction(User $user, Transaction $transaction, array $data): Transaction
@@ -68,6 +77,8 @@ class TransactionService
         abort_unless($transaction->user_id === $user->id, 403);
 
         return DB::transaction(function () use ($user, $transaction, $data) {
+            $transaction = $user->transactions()->lockForUpdate()->findOrFail($transaction->id);
+            $this->lockAccounts($user, [$transaction->account_id, $transaction->related_account_id, $data['account_id'], $data['to_account_id'] ?? null]);
             $oldAccount = $this->lockAccount($user, (int) $transaction->account_id);
             $oldRelated = $transaction->type === 'transfer' && $transaction->related_account_id
                 ? $this->lockAccount($user, (int) $transaction->related_account_id) : null;
@@ -85,35 +96,39 @@ class TransactionService
                 'type' => $data['type'], 'amount' => $data['amount'],
                 'note' => $data['note'] ?? null, 'date' => $data['date'],
             ]);
+
             return $transaction->fresh(['account', 'relatedAccount', 'category']);
-        });
+        }, 3);
     }
 
     public function deleteTransaction(User $user, Transaction $transaction): void
     {
         abort_unless($transaction->user_id === $user->id, 403);
         DB::transaction(function () use ($user, $transaction) {
+            $transaction = $user->transactions()->lockForUpdate()->findOrFail($transaction->id);
+            $this->lockAccounts($user, [$transaction->account_id, $transaction->related_account_id]);
             $account = $this->lockAccount($user, (int) $transaction->account_id);
             $related = $transaction->type === 'transfer' && $transaction->related_account_id
                 ? $this->lockAccount($user, (int) $transaction->related_account_id) : null;
             $this->applyBalanceEffect($account, $related, $transaction->type, $transaction->amount, -1);
             $transaction->delete();
-        });
+        }, 3);
     }
 
     public function report(User $user, string $month): array
     {
-        $start = Carbon::createFromFormat('Y-m', $month)->startOfMonth();
+        $start = Carbon::createFromFormat('!Y-m', $month)->startOfMonth();
         $end = $start->copy()->endOfMonth();
         $prevStart = $start->copy()->subMonth()->startOfMonth();
         $prevEnd = $prevStart->copy()->endOfMonth();
 
-        $summary = fn ($s, $e) => Transaction::where('user_id', $user->id)->whereBetween('date', [$s, $e])
+        $summary = fn ($s, $e) => Transaction::where('user_id', $user->id)->whereBetween('date', [$s->toDateString(), $e->toDateString()])
             ->selectRaw("COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) income, COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) expense")->first();
-        $cur = $summary($start, $end); $prev = $summary($prevStart, $prevEnd);
+        $cur = $summary($start, $end);
+        $prev = $summary($prevStart, $prevEnd);
 
         $categories = Transaction::leftJoin('categories', 'transactions.category_id', '=', 'categories.id')
-            ->where('transactions.user_id', $user->id)->where('transactions.type', 'expense')->whereBetween('transactions.date', [$start, $end])
+            ->where('transactions.user_id', $user->id)->where('transactions.type', 'expense')->whereBetween('transactions.date', [$start->toDateString(), $end->toDateString()])
             ->groupBy('transactions.category_id', 'categories.name')
             ->selectRaw("COALESCE(categories.name,'Lainnya') name, SUM(transactions.amount) amount")
             ->orderByDesc('amount')->get();
@@ -121,36 +136,57 @@ class TransactionService
         $weekly = collect(range(1, 5))->map(function ($week) use ($user, $start, $end) {
             $s = $start->copy()->addDays(($week - 1) * 7);
             $e = $s->copy()->addDays(6)->min($end);
-            if ($s->gt($end)) return ['label' => "Week {$week}", 'income' => 0, 'expense' => 0];
-            $r = Transaction::where('user_id', $user->id)->whereBetween('date', [$s, $e])
+            if ($s->gt($end)) {
+                return ['label' => "Week {$week}", 'income' => 0, 'expense' => 0];
+            }
+            $r = Transaction::where('user_id', $user->id)->whereBetween('date', [$s->toDateString(), $e->toDateString()])
                 ->selectRaw("COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) income, COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) expense")->first();
-            return ['label' => "Week {$week}", 'income' => (float)$r->income, 'expense' => (float)$r->expense];
+
+            return ['label' => "Week {$week}", 'income' => (float) $r->income, 'expense' => (float) $r->expense];
         })->values();
 
-        return ['month'=>$month,'income'=>(float)$cur->income,'expense'=>(float)$cur->expense,'net'=>(float)$cur->income-(float)$cur->expense,
-            'previous'=>['income'=>(float)$prev->income,'expense'=>(float)$prev->expense,'net'=>(float)$prev->income-(float)$prev->expense],
-            'categories'=>$categories->map(fn($x)=>['name'=>$x->name,'amount'=>(float)$x->amount])->values(), 'weekly'=>$weekly];
+        return ['month' => $month, 'income' => (float) $cur->income, 'expense' => (float) $cur->expense, 'net' => (float) $cur->income - (float) $cur->expense,
+            'previous' => ['income' => (float) $prev->income, 'expense' => (float) $prev->expense, 'net' => (float) $prev->income - (float) $prev->expense],
+            'categories' => $categories->map(fn ($x) => ['name' => $x->name, 'amount' => (float) $x->amount])->values(), 'weekly' => $weekly];
     }
 
     public function cashFlow(User $user, int $months = 6): array
     {
-        $months = max(1, min($months, 24)); $now = now()->startOfMonth();
+        $months = max(1, min($months, 24));
+        $now = now()->startOfMonth();
+
         return collect(range($months - 1, 0))->map(function ($offset) use ($user, $now) {
             $d = $now->copy()->subMonths($offset);
-            $r = Transaction::where('user_id',$user->id)->whereYear('date',$d->year)->whereMonth('date',$d->month)
+            $r = Transaction::where('user_id', $user->id)->whereYear('date', $d->year)->whereMonth('date', $d->month)
                 ->selectRaw("COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) income, COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) expense")->first();
-            return ['month'=>$d->format('Y-m'),'label'=>$d->locale('id')->translatedFormat('M'),'income'=>(float)$r->income,'expense'=>(float)$r->expense];
+
+            return ['month' => $d->format('Y-m'), 'label' => $d->locale('id')->translatedFormat('M'), 'income' => (float) $r->income, 'expense' => (float) $r->expense];
         })->values()->all();
     }
 
-    private function lockAccount(User $user, int $id): Account { return Account::where('user_id',$user->id)->lockForUpdate()->findOrFail($id); }
+    private function lockAccounts(User $user, array $ids): void
+    {
+        // Acquire every affected account in the same order, including both transfer sides.
+        Account::where('user_id', $user->id)->whereIn('id', array_filter($ids))
+            ->orderBy('id')->lockForUpdate()->get();
+    }
+
+    private function lockAccount(User $user, int $id): Account
+    {
+        return Account::where('user_id', $user->id)->lockForUpdate()->findOrFail($id);
+    }
+
     private function applyBalanceEffect(Account $account, ?Account $related, string $type, $amount, int $direction): void
     {
-        if ($type === 'income') $direction === 1 ? $account->increment('balance',$amount) : $account->decrement('balance',$amount);
-        elseif ($type === 'expense') $direction === 1 ? $account->decrement('balance',$amount) : $account->increment('balance',$amount);
-        elseif ($type === 'transfer') {
-            $direction === 1 ? $account->decrement('balance',$amount) : $account->increment('balance',$amount);
-            if ($related) $direction === 1 ? $related->increment('balance',$amount) : $related->decrement('balance',$amount);
+        if ($type === 'income') {
+            $direction === 1 ? $account->increment('balance', $amount) : $account->decrement('balance', $amount);
+        } elseif ($type === 'expense') {
+            $direction === 1 ? $account->decrement('balance', $amount) : $account->increment('balance', $amount);
+        } elseif ($type === 'transfer') {
+            $direction === 1 ? $account->decrement('balance', $amount) : $account->increment('balance', $amount);
+            if ($related) {
+                $direction === 1 ? $related->increment('balance', $amount) : $related->decrement('balance', $amount);
+            }
         }
     }
 }

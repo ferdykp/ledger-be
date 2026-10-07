@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rules\Password;
 
 class RegisterRequest extends FormRequest
 {
@@ -26,22 +27,22 @@ class RegisterRequest extends FormRequest
             'name' => [
                 'required',
                 'string',
-                'max:255'
+                'max:255',
             ],
 
             'email' => [
                 'required',
                 'email',
                 'max:255',
-                'unique:users,email'
+                'unique:users,email',
             ],
 
             'password' => [
                 'required',
                 'string',
-                'min:8',
-                'confirmed' #untuk konfirmasi password re-type
-            ]
+                Password::min(8)->letters()->numbers(),
+                'confirmed', // untuk konfirmasi password re-type
+            ],
         ];
     }
 }

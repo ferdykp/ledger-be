@@ -15,8 +15,8 @@ class StoreGoalRequest extends FormRequest
     {
         return [
             'name' => ['required', 'string', 'max:255'],
-            'target_amount' => ['required', 'numeric', 'gt:0'],
-            'current_amount' => ['nullable', 'numeric', 'gte:0'],
+            'target_amount' => ['required', 'numeric', 'gt:0', 'decimal:0,2', 'max:9999999999999.99'],
+            'current_amount' => ['nullable', 'numeric', 'gte:0', 'decimal:0,2', 'max:9999999999999.99'],
             'target_date' => ['nullable', 'date'],
             'icon' => ['nullable', 'string', 'max:255'],
         ];

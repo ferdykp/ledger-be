@@ -17,7 +17,7 @@ class StoreAccountRequest extends FormRequest
         return [
             'name' => ['required', 'string', 'max:255'],
             'type' => ['required', Rule::in(['cash', 'bank', 'ewallet', 'credit_card'])],
-            'balance' => ['nullable', 'numeric', 'min:0'],
+            'balance' => ['nullable', 'numeric', 'min:0', 'decimal:0,2', 'max:9999999999999.99'],
             'color' => ['nullable', 'string', 'regex:/^#([a-fA-F0-9]{6})$/'],
             'icon' => ['nullable', 'string', 'max:255'],
         ];
