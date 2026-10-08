@@ -17,10 +17,13 @@ class WhatsAppMessage extends Model
         'body',
         'payload',
         'processed_at',
+        'reply_text',
+        'replied_at',
     ];
 
     protected $casts = [
         'payload' => 'array',
         'processed_at' => 'datetime',
+        'replied_at' => 'datetime',
     ];
 }

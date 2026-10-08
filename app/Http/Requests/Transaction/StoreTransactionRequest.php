@@ -2,8 +2,8 @@
 
 namespace App\Http\Requests\Transaction;
 
+use App\Support\TransactionRules;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 
 class StoreTransactionRequest extends FormRequest
 {
@@ -14,21 +14,7 @@ class StoreTransactionRequest extends FormRequest
 
     public function rules(): array
     {
-        return [
-            'type' => ['required', Rule::in(['income', 'expense', 'transfer'])],
-            'account_id' => ['required', Rule::exists('accounts', 'id')->where('user_id', $this->user()->id)],
-            'to_account_id' => [
-                'exclude_unless:type,transfer',
-                'nullable',
-                'required_if:type,transfer',
-                'different:account_id',
-                Rule::exists('accounts', 'id')->where('user_id', $this->user()->id),
-            ],
-            'category_id' => ['exclude_if:type,transfer', 'nullable', Rule::exists('categories', 'id')->where('user_id', $this->user()->id)->where('type', $this->input('type'))],
-            'amount' => ['required', 'numeric', 'gt:0', 'decimal:0,2', 'max:9999999999999.99'],
-            'date' => ['required', 'date'],
-            'note' => ['nullable', 'string', 'max:500'],
-        ];
+        return TransactionRules::forUser($this->user(), $this->input('type'));
     }
 
     protected function prepareForValidation(): void

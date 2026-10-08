@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\User;
 use App\Models\WhatsAppConnection;
 use App\Models\WhatsAppVerificationCode;
 use App\Services\WhatsApp\EvolutionProvider;
@@ -26,14 +27,14 @@ class WhatsAppVerificationController extends Controller
         $phone = preg_replace('/\D/', '', $data['phone_number']);
 
         if (str_starts_with($phone, '0')) {
-            $phone = '62' . substr($phone, 1);
+            $phone = '62'.substr($phone, 1);
         }
 
         if (str_starts_with($phone, '8')) {
-            $phone = '62' . $phone;
+            $phone = '62'.$phone;
         }
 
-        if (!preg_match('/^62[0-9]{8,13}$/', $phone)) {
+        if (! preg_match('/^62[0-9]{8,13}$/', $phone)) {
             throw ValidationException::withMessages([
                 'phone_number' => 'Masukkan nomor WhatsApp Indonesia yang valid.',
             ]);
@@ -68,8 +69,8 @@ class WhatsAppVerificationController extends Controller
             ]);
         }
 
-        $userKey = 'wa-otp:user:' . $user->id;
-        $phoneKey = 'wa-otp:phone:' . hash('sha256', $phone);
+        $userKey = 'wa-otp:user:'.$user->id;
+        $phoneKey = 'wa-otp:phone:'.hash('sha256', $phone);
 
         if (
             RateLimiter::tooManyAttempts($userKey, 5) ||
@@ -80,9 +81,9 @@ class WhatsAppVerificationController extends Controller
             ], 429);
         }
 
-        $cooldownKey = 'wa-otp:cooldown:' . $user->id;
+        $cooldownKey = 'wa-otp:cooldown:'.$user->id;
 
-        if (!Cache::add($cooldownKey, true, 60)) {
+        if (! Cache::add($cooldownKey, true, 60)) {
             return response()->json([
                 'message' => 'Tunggu 60 detik sebelum meminta kode baru.',
             ], 429);
@@ -101,9 +102,9 @@ class WhatsAppVerificationController extends Controller
         ]);
 
         $message = "Kode verifikasi Ledger Anda:\n\n"
-            . "{$code}\n\n"
-            . "Berlaku selama 10 menit.\n"
-            . "Jangan berikan kode ini kepada siapa pun.";
+            ."{$code}\n\n"
+            ."Berlaku selama 10 menit.\n"
+            .'Jangan berikan kode ini kepada siapa pun.';
 
         try {
             $sent = $provider->sendText($phone, $message);
@@ -112,7 +113,7 @@ class WhatsAppVerificationController extends Controller
             $sent = false;
         }
 
-        if (!$sent) {
+        if (! $sent) {
             $otp->delete();
             Cache::forget($cooldownKey);
 
@@ -145,13 +146,14 @@ class WhatsAppVerificationController extends Controller
         $user = $request->user();
 
         $result = DB::transaction(function () use ($user, $data) {
+            User::whereKey($user->id)->lockForUpdate()->firstOrFail();
             $otp = WhatsAppVerificationCode::where('user_id', $user->id)
                 ->whereNull('used_at')
                 ->latest('id')
                 ->lockForUpdate()
                 ->first();
 
-            if (!$otp || $otp->expires_at->isPast()) {
+            if (! $otp || $otp->expires_at->isPast()) {
                 return ['error' => 'Kode tidak ditemukan atau sudah kedaluwarsa.'];
             }
 
@@ -161,7 +163,7 @@ class WhatsAppVerificationController extends Controller
 
             $otp->increment('attempts');
 
-            if (!Hash::check($data['code'], $otp->code_hash)) {
+            if (! Hash::check($data['code'], $otp->code_hash)) {
                 return ['error' => 'Kode verifikasi salah.'];
             }
 
@@ -208,12 +210,12 @@ class WhatsAppVerificationController extends Controller
         // Kirim setelah transaksi database commit; kegagalan pesan tidak membatalkan verifikasi.
         try {
             $provider->sendText($result['phone'], "🎉 WhatsApp berhasil terhubung ke Ledger!\n\n"
-                . "Contoh transaksi:\n"
-                . "• bensin 50rb bca\n"
-                . "• makan 35k gopay\n"
-                . "• gaji 8jt masuk bca\n\n"
-                . "Ketik bantuan untuk melihat panduan.\n"
-                . "Gunakan nama dompet yang sudah dibuat di Ledger.");
+                ."Contoh transaksi:\n"
+                ."• bensin 50rb bca\n"
+                ."• makan 35k gopay\n"
+                ."• gaji 8jt masuk bca\n\n"
+                ."Ketik bantuan untuk melihat panduan.\n"
+                .'Gunakan nama dompet yang sudah dibuat di Ledger.');
         } catch (\Throwable $e) {
             report($e);
         }
