@@ -136,7 +136,7 @@ class WhatsAppVerificationController extends Controller
         ]);
     }
 
-    public function verify(Request $request): JsonResponse
+    public function verify(Request $request, EvolutionProvider $provider): JsonResponse
     {
         $data = $request->validate([
             'code' => ['required', 'digits:6'],
@@ -196,13 +196,26 @@ class WhatsAppVerificationController extends Controller
 
             $otp->update(['used_at' => now()]);
 
-            return ['success' => true];
+            return ['success' => true, 'phone' => $otp->phone_number];
         });
 
         if (isset($result['error'])) {
             throw ValidationException::withMessages([
                 'code' => $result['error'],
             ]);
+        }
+
+        // Kirim setelah transaksi database commit; kegagalan pesan tidak membatalkan verifikasi.
+        try {
+            $provider->sendText($result['phone'], "🎉 WhatsApp berhasil terhubung ke Ledger!\n\n"
+                . "Contoh transaksi:\n"
+                . "• bensin 50rb bca\n"
+                . "• makan 35k gopay\n"
+                . "• gaji 8jt masuk bca\n\n"
+                . "Ketik bantuan untuk melihat panduan.\n"
+                . "Gunakan nama dompet yang sudah dibuat di Ledger.");
+        } catch (\Throwable $e) {
+            report($e);
         }
 
         return response()->json([
