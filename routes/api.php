@@ -12,6 +12,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\WhatsAppIntegrationController;
 use App\Http\Controllers\Webhooks\WhatsAppWebhookController;
+use App\Http\Controllers\WhatsAppVerificationController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -29,7 +30,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/integrations/whatsapp/pairing', [WhatsAppIntegrationController::class, 'pairing'])->middleware('throttle:5,1');
     Route::delete('/integrations/whatsapp', [WhatsAppIntegrationController::class, 'disconnect']);
     Route::post('/logout', [AuthController::class, 'logout']);
-    Route::get('/user', fn (Request $request) => $request->user());
+    Route::get('/user', fn(Request $request) => $request->user());
     Route::post('user/profile', [ProfileController::class, 'update']);
     Route::put('user/password', [PasswordController::class, 'change'])->middleware('throttle:5,1');
     Route::apiResource('accounts', AccountController::class);
@@ -44,4 +45,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('bills/{bill}/paid', [BillController::class, 'markPaid']);
     Route::apiResource('goals', GoalController::class);
     Route::post('goals/{goal}/contributions', [GoalController::class, 'addContribution']);
+
+    Route::post(
+        '/integrations/whatsapp/otp/send',
+        [WhatsAppVerificationController::class, 'send']
+    )->middleware('throttle:5,60');
+
+    Route::post(
+        '/integrations/whatsapp/otp/verify',
+        [WhatsAppVerificationController::class, 'verify']
+    )->middleware('throttle:10,1');
 });

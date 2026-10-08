@@ -1,5 +1,37 @@
 <?php
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
-return new class extends Migration { public function up(): void { Schema::create('whatsapp_messages', function (Blueprint $t) { $t->id(); $t->foreignId('user_id')->nullable()->constrained()->nullOnDelete(); $t->string('provider_message_id')->unique(); $t->string('phone_number')->index(); $t->string('direction')->default('inbound'); $t->string('message_type')->default('text'); $t->text('body')->nullable(); $t->json('payload')->nullable(); $t->timestamp('processed_at')->nullable(); $t->timestamps(); }); Schema::create('conversation_sessions', function (Blueprint $t) { $t->id(); $t->foreignId('user_id')->unique()->constrained()->cascadeOnDelete(); $t->string('channel')->default('whatsapp'); $t->string('state')->default('idle'); $t->json('context')->nullable(); $t->timestamp('expires_at')->nullable(); $t->timestamps(); }); } public function down(): void { Schema::dropIfExists('conversation_sessions'); Schema::dropIfExists('whatsapp_messages'); } };
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('whatsapp_messages', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
+            $t->string('provider_message_id')->unique();
+            $t->string('phone_number')->index();
+            $t->string('direction')->default('inbound');
+            $t->string('message_type')->default('text');
+            $t->text('body')->nullable();
+            $t->json('payload')->nullable();
+            $t->timestamp('processed_at')->nullable();
+            $t->timestamps();
+        });
+        Schema::create('conversation_sessions', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('user_id')->unique()->constrained()->cascadeOnDelete();
+            $t->string('channel')->default('whatsapp');
+            $t->string('state')->default('idle');
+            $t->json('context')->nullable();
+            $t->timestamp('expires_at')->nullable();
+            $t->timestamps();
+        });
+    }
+    public function down(): void
+    {
+        Schema::dropIfExists('conversation_sessions');
+        Schema::dropIfExists('whatsapp_messages');
+    }
+};
