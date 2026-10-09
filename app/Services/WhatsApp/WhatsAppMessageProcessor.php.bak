@@ -39,17 +39,19 @@ class WhatsAppMessageProcessor
     ) {}
 
     /**
-     * Process incoming WhatsApp messages.
+     * Process an incoming WhatsApp message.
      *
-     * Replies are returned as strings so that the webhook
-     * can deliver them after the database transaction commits.
+     * Return the reply text for delivery by the webhook.
+     * Do not send network requests inside the transaction.
      */
     public function handle(string $phone, string $text): string
     {
         return DB::transaction(function () use ($phone, $text) {
 
-            $connection = WhatsAppConnection::query()
-                ->where('phone_number', $phone)
+            $connection = WhatsAppConnection::where(
+                'phone_number',
+                $phone
+            )
                 ->where('status', 'connected')
                 ->first();
 
@@ -57,42 +59,47 @@ class WhatsAppMessageProcessor
                 ! $connection ||
                 preg_match('/^LINK\s+/i', trim($text))
             ) {
-                return $this->message(
-                    '🔐 *Hubungkan WhatsApp ke Ledger*',
-                    [
-                        'Nomor ini belum terhubung dengan akun Ledger.',
-                        'Buka aplikasi Ledger → *Pengaturan* → *WhatsApp*, lalu verifikasi nomor kamu.',
-                        '_Setelah terhubung, kamu bisa mencatat transaksi langsung lewat chat._',
-                    ]
-                );
+                return "🔐 *WhatsApp Belum Terhubung*\n\n"
+                    . "Nomor ini belum terhubung ke Ledger.\n\n"
+                    . "Buka *Ledger → Pengaturan → WhatsApp* "
+                    . "untuk menghubungkan nomor melalui verifikasi OTP.";
             }
 
-            // Lock user to serialize financial operations.
-            $user = User::query()
-                ->whereKey($connection->user_id)
+            /*
+            |--------------------------------------------------------------------------
+            | Lock User and Connection
+            |--------------------------------------------------------------------------
+            */
+
+            $user = User::whereKey(
+                $connection->user_id
+            )
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            $connection = WhatsAppConnection::query()
-                ->whereKey($connection->id)
+            $connection = WhatsAppConnection::whereKey(
+                $connection->id
+            )
                 ->where('phone_number', $phone)
                 ->where('status', 'connected')
                 ->lockForUpdate()
                 ->first();
 
             if (! $connection) {
-                return $this->message(
-                    '🔌 *Koneksi WhatsApp Terputus*',
-                    [
-                        'Nomor WhatsApp kamu sudah tidak terhubung ke Ledger.',
-                        'Silakan lakukan verifikasi ulang melalui *Pengaturan → WhatsApp*.',
-                    ]
-                );
+                return "🔌 *Koneksi Terputus*\n\n"
+                    . "Nomor WhatsApp kamu sudah tidak terhubung.\n"
+                    . "Silakan lakukan verifikasi ulang melalui Ledger.";
             }
 
             $connection->update([
                 'last_message_at' => now(),
             ]);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Conversation Session
+            |--------------------------------------------------------------------------
+            */
 
             $session = ConversationSession::firstOrCreate(
                 [
@@ -104,8 +111,9 @@ class WhatsAppMessageProcessor
                 ]
             );
 
-            $session = ConversationSession::query()
-                ->whereKey($session->id)
+            $session = ConversationSession::whereKey(
+                $session->id
+            )
                 ->lockForUpdate()
                 ->firstOrFail();
 
@@ -132,10 +140,11 @@ class WhatsAppMessageProcessor
 
             /*
             |--------------------------------------------------------------------------
-            | Informational Commands
+            | Financial Information Commands
             |--------------------------------------------------------------------------
             |
-            | These commands must not clear pending transactions.
+            | Informational commands must not clear
+            | or modify a pending transaction draft.
             |
             */
 
@@ -162,23 +171,25 @@ class WhatsAppMessageProcessor
                 );
             }
 
+            /*
+            |--------------------------------------------------------------------------
+            | Confirmation Without Pending Draft
+            |--------------------------------------------------------------------------
+            */
+
             if (in_array($command, [
                 ...self::CONFIRM,
                 ...self::CANCEL,
             ], true)) {
-                return $this->message(
-                    '💬 *Belum Ada Transaksi*',
-                    [
-                        'Saat ini tidak ada transaksi yang menunggu konfirmasi.',
-                        'Kamu bisa langsung mengirim transaksi baru.',
-                        '✍️ _Contoh: bensin 50rb bca_',
-                    ]
-                );
+                return "💬 *Belum Ada Transaksi*\n\n"
+                    . "Tidak ada transaksi yang menunggu konfirmasi.\n\n"
+                    . "Kirim detail transaksi baru untuk mulai mencatat.\n\n"
+                    . "✍️ _Contoh: bensin 50rb bca_";
             }
 
             /*
             |--------------------------------------------------------------------------
-            | New Transaction
+            | Create Transaction Draft
             |--------------------------------------------------------------------------
             */
 
@@ -191,7 +202,7 @@ class WhatsAppMessageProcessor
     }
 
     /**
-     * Build a transaction draft.
+     * Parse and validate a transaction draft.
      */
     private function draft(
         User $user,
@@ -202,15 +213,15 @@ class WhatsAppMessageProcessor
             ->where('is_archived', false)
             ->get();
 
-        $draft = $this->parser->parse($user, $text);
+        $draft = $this->parser->parse(
+            $user,
+            $text
+        );
 
         /*
         |--------------------------------------------------------------------------
         | Unknown Wallet Detection
         |--------------------------------------------------------------------------
-        |
-        | Do not treat the entire tail of a transfer as one wallet.
-        |
         */
 
         if (
@@ -222,22 +233,19 @@ class WhatsAppMessageProcessor
                 $match
             )
         ) {
-            $walletName = trim($match[1]);
-
             $available = $accounts
                 ->pluck('name')
                 ->implode(', ');
 
-            return $this->message(
-                '👛 *Dompet Tidak Ditemukan*',
-                [
-                    "Dompet *{$walletName}* belum tersedia di Ledger.",
-                    'Transaksi belum dicatat dan saldo tidak berubah.',
-                    '💳 *Dompet tersedia:*',
-                    $available ?: '_Belum ada dompet aktif._',
-                    'Silakan gunakan nama dompet yang tersedia atau tambahkan dompet baru melalui aplikasi Ledger.',
-                ]
-            );
+            $walletName = trim($match[1]);
+
+            return "👛 *Dompet Tidak Ditemukan*\n\n"
+                . "Dompet *{$walletName}* belum tersedia di Ledger.\n\n"
+                . "💳 *Dompet tersedia:*\n"
+                . ($available ?: 'Belum ada dompet aktif.')
+                . "\n\n"
+                . "Silakan gunakan dompet yang tersedia.\n"
+                . "_Transaksi belum dicatat dan saldo tidak berubah._";
         }
 
         /*
@@ -245,8 +253,8 @@ class WhatsAppMessageProcessor
         | AI Fallback
         |--------------------------------------------------------------------------
         |
-        | AI can fill missing fields but cannot change
-        | the locally classified transaction direction.
+        | AI may fill missing information but must not
+        | override locally determined transfer direction.
         |
         */
 
@@ -266,6 +274,12 @@ class WhatsAppMessageProcessor
 
         $payload = $this->payload($draft);
 
+        /*
+        |--------------------------------------------------------------------------
+        | Validate Transaction
+        |--------------------------------------------------------------------------
+        */
+
         $validator = Validator::make(
             $payload,
             TransactionRules::forUser(
@@ -279,21 +293,23 @@ class WhatsAppMessageProcessor
                 ->pluck('name')
                 ->implode(', ');
 
-            return $this->message(
-                '⚠️ *Transaksi Belum Bisa Diproses*',
-                [
-                    'Ada informasi yang belum lengkap atau belum valid.',
-                    'Pastikan nominal dan dompet sudah sesuai.',
-                    '✍️ *Contoh transaksi:*',
-                    '• bensin 50rb bca',
-                    '• makan 35k gopay',
-                    '• transfer 50rb bca ke gopay',
-                    '💳 *Dompet tersedia:*',
-                    $available ?: '_Belum ada dompet aktif._',
-                    '_Tenang, saldo kamu belum berubah._',
-                ]
-            );
+            return "⚠️ *Transaksi Belum Bisa Diproses*\n\n"
+                . "Ada detail transaksi yang belum lengkap atau belum valid.\n\n"
+                . "✍️ *Contoh penulisan:*\n"
+                . "• bensin 50rb bca\n"
+                . "• makan 35k gopay\n"
+                . "• transfer 50rb bca ke gopay\n\n"
+                . "💳 *Dompet tersedia:*\n"
+                . ($available ?: 'Belum ada dompet aktif.')
+                . "\n\n"
+                . "_Transaksi belum disimpan._";
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Verify Active Wallets
+        |--------------------------------------------------------------------------
+        */
 
         $account = $accounts->firstWhere(
             'id',
@@ -306,36 +322,37 @@ class WhatsAppMessageProcessor
         );
 
         if (
-            ! $account
-            || (
+            ! $account ||
+            (
                 $payload['type'] === 'transfer'
                 && ! $target
             )
         ) {
-            return $this->message(
-                '👛 *Dompet Tidak Tersedia*',
-                [
-                    'Dompet yang dipilih tidak tersedia atau sudah diarsipkan.',
-                    'Gunakan dompet aktif yang ada di Ledger.',
-                    '_Transaksi belum dicatat._',
-                ]
-            );
+            return "👛 *Dompet Tidak Tersedia*\n\n"
+                . "Dompet yang dipilih tidak ditemukan atau sudah diarsipkan.\n\n"
+                . "Gunakan dompet aktif yang tersedia di Ledger.";
         }
-
-        $draft['account_name'] = $account->name;
-        $draft['related_account_name'] = $target?->name;
 
         /*
         |--------------------------------------------------------------------------
-        | Save Pending Draft
+        | Save Draft
         |--------------------------------------------------------------------------
         */
+
+        $draft['account_name'] = $account->name;
+        $draft['related_account_name'] = $target?->name;
 
         $session->update([
             'state' => 'waiting_confirmation',
             'context' => $draft,
             'expires_at' => now()->addMinutes(30),
         ]);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Confirmation Preview
+        |--------------------------------------------------------------------------
+        */
 
         return $this->confirmationMessage(
             $payload,
@@ -355,49 +372,43 @@ class WhatsAppMessageProcessor
     ): string {
         /*
         |--------------------------------------------------------------------------
-        | Cancel Transaction
+        | Cancel
         |--------------------------------------------------------------------------
         */
 
         if (in_array($command, self::CANCEL, true)) {
             $this->clear($session);
 
-            return $this->message(
-                '↩️ *Transaksi Dibatalkan*',
-                [
-                    'Oke, transaksi tadi sudah dibatalkan.',
-                    'Tidak ada perubahan pada saldo dompet kamu.',
-                    'Kirim detail transaksi baru kapan saja kalau ingin mencoba lagi. 😊',
-                ]
-            );
+            return "↩️ *Transaksi Dibatalkan*\n\n"
+                . "Oke, transaksi tadi sudah dibatalkan.\n"
+                . "Tidak ada perubahan pada saldo dompet kamu.\n\n"
+                . "Kirim transaksi baru kapan saja. 😊";
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Waiting for Confirmation
+        | Unknown Confirmation Command
         |--------------------------------------------------------------------------
         */
 
         if (! in_array($command, self::CONFIRM, true)) {
-            return $this->message(
-                '⏳ *Menunggu Konfirmasi*',
-                [
-                    'Transaksi kamu sudah siap, tetapi belum disimpan.',
-                    '*1* — Simpan transaksi',
-                    '*3* — Batalkan transaksi',
-                    '_Konfirmasi berlaku selama 30 menit sejak transaksi dibuat._',
-                ]
-            );
+            return "⏳ *Menunggu Konfirmasi*\n\n"
+                . "Transaksi kamu sudah siap, tetapi belum disimpan.\n\n"
+                . "*1* — Simpan transaksi\n"
+                . "*3* — Batalkan transaksi\n\n"
+                . "_Konfirmasi berlaku selama 30 menit._";
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Validate Pending Transaction
+        | Revalidate Pending Draft
         |--------------------------------------------------------------------------
         */
 
+        $confirmedDraft = $session->context ?? [];
+
         $payload = $this->payload(
-            $session->context ?? []
+            $confirmedDraft
         );
 
         $validator = Validator::make(
@@ -424,15 +435,10 @@ class WhatsAppMessageProcessor
         ) {
             $this->clear($session);
 
-            return $this->message(
-                '⚠️ *Transaksi Perlu Diperbarui*',
-                [
-                    'Beberapa detail transaksi sudah tidak valid atau mengalami perubahan.',
-                    'Untuk keamanan, transaksi tidak disimpan.',
-                    'Silakan kirim ulang transaksi dengan informasi terbaru.',
-                    '_Saldo kamu tidak berubah._',
-                ]
-            );
+            return "⚠️ *Transaksi Tidak Dapat Disimpan*\n\n"
+                . "Detail transaksi tidak valid atau sudah berubah.\n\n"
+                . "Silakan kirim ulang transaksi dengan informasi terbaru.\n"
+                . "_Saldo kamu belum berubah._";
         }
 
         /*
@@ -441,21 +447,22 @@ class WhatsAppMessageProcessor
         |--------------------------------------------------------------------------
         */
 
-        $transaction = $this->transactions->createTransaction(
-            $user,
-            $validator->validated()
-        );
+        $transaction = $this->transactions
+            ->createTransaction(
+                $user,
+                $validator->validated()
+            );
 
         $this->clear($session);
 
         return $this->successMessage(
             $transaction,
-            $session->context ?? []
+            $confirmedDraft
         );
     }
 
     /**
-     * Transaction confirmation message.
+     * Transaction confirmation preview.
      */
     private function confirmationMessage(
         array $payload,
@@ -466,9 +473,9 @@ class WhatsAppMessageProcessor
         $type = $payload['type'];
 
         $title = match ($type) {
-            'income' => '💰 *Pemasukan Baru*',
-            'transfer' => '🔄 *Transfer Antar Dompet*',
-            default => '💸 *Pengeluaran Baru*',
+            'income' => '💰 *Konfirmasi Pemasukan*',
+            'transfer' => '🔄 *Konfirmasi Transfer*',
+            default => '💸 *Konfirmasi Pengeluaran*',
         };
 
         $typeLabel = match ($type) {
@@ -481,55 +488,60 @@ class WhatsAppMessageProcessor
             $payload['amount']
         );
 
-        $category = $draft['category_name']
-            ?? 'Tanpa kategori';
-
         $date = $this->formatDate(
             $payload['date']
         );
+
+        $category = $draft['category_name']
+            ?? 'Tanpa kategori';
 
         $note = trim(
             (string) ($payload['note'] ?? '')
         );
 
-        $lines = [
-            'Berikut detail transaksi kamu:',
-            "💵 *{$amount}*",
-            '━━━━━━━━━━━━━━━━',
-            "🏷️ Jenis: *{$typeLabel}*",
-        ];
+        /*
+        |--------------------------------------------------------------------------
+        | Build WhatsApp Message
+        |--------------------------------------------------------------------------
+        */
+
+        $message = $title . "\n\n";
+
+        $message .= "Berikut detail transaksi kamu:\n\n";
+
+        $message .= "💵 *{$amount}*\n";
+
+        $message .= "━━━━━━━━━━━━━━━━\n";
+
+        $message .= "🏷️ Jenis: {$typeLabel}\n";
 
         if ($type === 'transfer') {
-            $lines[] = "💳 Dari: *{$accountName}*";
-
-            if ($targetName) {
-                $lines[] = "➡️ Ke: *{$targetName}*";
-            }
+            $message .= "💳 Dompet: {$accountName} → {$targetName}\n";
         } else {
-            $lines[] = "💳 Dompet: *{$accountName}*";
-            $lines[] = "📂 Kategori: {$category}";
+            $message .= "💳 Dompet: {$accountName}\n";
+            $message .= "📂 Kategori: {$category}\n";
         }
 
-        $lines[] = "📅 Tanggal: {$date}";
+        $message .= "📅 Tanggal: {$date}\n";
 
         if ($note !== '') {
-            $lines[] = "📝 Catatan: {$note}";
+            $message .= "📝 Catatan: {$note}\n";
         }
 
-        $lines[] = '━━━━━━━━━━━━━━━━';
-        $lines[] = '*Sudah sesuai?*';
-        $lines[] = '*1* — Simpan transaksi';
-        $lines[] = '*3* — Batalkan';
-        $lines[] = '_Konfirmasi berlaku selama 30 menit._';
+        $message .= "━━━━━━━━━━━━━━━━\n\n";
 
-        return $this->message(
-            $title,
-            $lines
-        );
+        $message .= "*Sudah sesuai?*\n\n";
+
+        $message .= "*1* — Simpan transaksi\n";
+        $message .= "*3* — Batalkan transaksi\n\n";
+
+        $message .= "_Konfirmasi berlaku selama 30 menit._";
+
+        return $message;
     }
 
     /**
-     * Successful transaction message.
+     * Successful transaction response.
      */
     private function successMessage(
         $transaction,
@@ -549,70 +561,78 @@ class WhatsAppMessageProcessor
 
         $accountName = $transaction->account->name;
 
-        $lines = [
-            'Transaksi berhasil disimpan di Ledger.',
-            "💵 *{$amount}*",
-            "💳 Dompet: *{$accountName}*",
-        ];
+        $message = $title . "\n\n";
+
+        $message .= "✅ Tersimpan! Transaksi berhasil dicatat di Ledger.\n\n";
+
+        $message .= "💵 *{$amount}*\n";
 
         if ($type === 'transfer') {
             $targetName = $draft['related_account_name']
                 ?? null;
 
+            $message .= "💳 Dari: {$accountName}\n";
+
             if ($targetName) {
-                $lines[] = "➡️ Tujuan: *{$targetName}*";
+                $message .= "➡️ Ke: {$targetName}\n";
             }
+        } else {
+            $message .= "💳 Dompet: {$accountName}\n";
         }
 
-        $lines[] = '━━━━━━━━━━━━━━━━';
-        $lines[] = 'Semua sudah tercatat. Keuangan jadi lebih mudah dipantau. ✨';
-        $lines[] = '_Ketik *dompet* untuk melihat saldo terbaru._';
+        $message .= "\n━━━━━━━━━━━━━━━━\n\n";
 
-        return $this->message(
-            $title,
-            $lines
-        );
+        $message .= "Keuangan kamu sudah diperbarui. ✨\n\n";
+
+        $message .= "_Ketik *dompet* untuk melihat saldo terbaru._";
+
+        return $message;
     }
 
     /**
      * Help menu.
+     *
+     * Uses a simple text response to preserve
+     * compatibility with the existing webhook.
      */
     private function helpMessage(): string
     {
-        return $this->message(
-            '👋 *Halo! Selamat Datang di Ledger*',
-            [
-                'Asisten keuangan pribadi kamu, langsung dari WhatsApp.',
-                'Catat transaksi, cek saldo, dan pantau keuangan cukup lewat chat. ✨',
-                '✍️ *CATAT TRANSAKSI*',
-                '• bensin 50rb bca',
-                '• makan 35k gopay',
-                '• gaji 1.000.000 bca',
-                '• transfer 50rb bca ke gopay',
-                '📊 *CEK KEUANGAN*',
-                '• *dompet* — Lihat semua saldo',
-                '• *saldo bca* — Saldo dompet tertentu',
-                '• *ringkasan hari ini* — Rekap harian',
-                '• *ringkasan bulan ini* — Rekap bulanan',
-                '• *5 transaksi terakhir* — Riwayat terbaru',
-                '💡 *TIPS*',
-                'Gunakan nama dompet yang sudah terdaftar di Ledger.',
-                'Setiap transaksi akan meminta konfirmasi sebelum disimpan.',
-                '*1* — Simpan transaksi',
-                '*3* — Batalkan transaksi',
-                '_Ketik *bantuan* kapan saja untuk melihat panduan ini._',
-            ]
-        );
+        return "📒 *Panduan Ledger*\n\n"
+            . "Halo! 👋\n"
+            . "Aku siap membantu kamu mencatat dan memantau keuangan langsung dari WhatsApp.\n\n"
+
+            . "✍️ *CATAT TRANSAKSI*\n"
+            . "• bensin 50rb bca\n"
+            . "• makan 35k gopay\n"
+            . "• gaji 1.000.000 bca\n"
+            . "• transfer 50rb bca ke gopay\n\n"
+
+            . "📊 *CEK KEUANGAN*\n"
+            . "• *dompet* — Lihat semua saldo\n"
+            . "• *saldo bca* — Cek saldo BCA\n"
+            . "• *ringkasan hari ini* — Rekap harian\n"
+            . "• *ringkasan bulan ini* — Rekap bulanan\n"
+            . "• *5 transaksi terakhir* — Riwayat terbaru\n\n"
+
+            . "💡 *CARA KONFIRMASI*\n"
+            . "Setelah mengirim transaksi, Ledger akan menampilkan ringkasan.\n\n"
+            . "*1* — Simpan transaksi\n"
+            . "*3* — Batalkan transaksi\n\n"
+
+            . "Gunakan nama dompet yang sudah terdaftar di Ledger.\n\n"
+            . "_Ketik *bantuan* kapan saja untuk membuka panduan ini._";
     }
 
     /**
-     * Convert parsed draft to transaction payload.
+     * Convert draft into validated transaction payload.
      */
     private function payload(array $draft): array
     {
         return [
             'type' => $draft['type'] ?? null,
-            'account_id' => $draft['account_id'] ?? null,
+
+            'account_id' => $draft['account_id']
+                ?? null,
 
             'to_account_id' => (
                 ($draft['type'] ?? null) === 'transfer'
@@ -620,18 +640,22 @@ class WhatsAppMessageProcessor
                 ? ($draft['related_account_id'] ?? null)
                 : null,
 
-            'category_id' => $draft['category_id'] ?? null,
-            'amount' => $draft['amount'] ?? null,
+            'category_id' => $draft['category_id']
+                ?? null,
+
+            'amount' => $draft['amount']
+                ?? null,
 
             'date' => $draft['date']
                 ?? now()->toDateString(),
 
-            'note' => $draft['note'] ?? null,
+            'note' => $draft['note']
+                ?? null,
         ];
     }
 
     /**
-     * Clear conversation session.
+     * Reset conversation state.
      */
     private function clear(
         ConversationSession $session
@@ -644,7 +668,7 @@ class WhatsAppMessageProcessor
     }
 
     /**
-     * AI fallback for incomplete transaction drafts.
+     * Merge missing information from Groq.
      */
     private function mergeAi(
         User $user,
@@ -660,10 +684,22 @@ class WhatsAppMessageProcessor
             return $draft;
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Amount
+        |--------------------------------------------------------------------------
+        */
+
         if (! $draft['amount']) {
             $draft['amount'] = $ai['amount']
                 ?? null;
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Wallet
+        |--------------------------------------------------------------------------
+        */
 
         if (
             ! $draft['account_id']
@@ -681,9 +717,10 @@ class WhatsAppMessageProcessor
         }
 
         /*
-         * AI must not change transaction type
-         * or transfer direction.
-         */
+        |--------------------------------------------------------------------------
+        | Category
+        |--------------------------------------------------------------------------
+        */
 
         if (
             ! $draft['category_id']
@@ -701,39 +738,26 @@ class WhatsAppMessageProcessor
             $draft['category_name'] = $category?->name;
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Preserve Local Transaction Classification
+        |--------------------------------------------------------------------------
+        |
+        | Groq must not change:
+        | - Transaction type
+        | - Transfer direction
+        | - Explicit source wallet
+        | - Explicit target wallet
+        |
+        */
+
         $draft['source'] = 'rule+groq';
 
         return $draft;
     }
 
     /**
-     * Consistent WhatsApp message layout.
-     *
-     * Single line breaks are used for related details.
-     * Blank lines separate distinct sections.
-     */
-    private function message(
-        string $title,
-        array $lines = []
-    ): string {
-        $body = collect($lines)
-            ->filter(
-                fn($line) => $line !== null
-                    && $line !== ''
-            )
-            ->implode("\n");
-
-        if ($body === '') {
-            return trim($title);
-        }
-
-        return trim(
-            $title . "\n\n" . $body
-        );
-    }
-
-    /**
-     * Format currency in Indonesian Rupiah.
+     * Format Indonesian Rupiah.
      */
     private function rupiah(
         float|int|string $amount
@@ -753,7 +777,7 @@ class WhatsAppMessageProcessor
     }
 
     /**
-     * Format date in Indonesian.
+     * Format dates in Indonesian.
      */
     private function formatDate(
         ?string $date

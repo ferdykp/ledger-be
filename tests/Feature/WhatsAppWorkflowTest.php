@@ -200,7 +200,7 @@ class WhatsAppWorkflowTest extends TestCase
         );
         $processor->handle($this->phone, 'makan 35k gopay');
         $this->travel(31)->minutes();
-        $this->assertStringContainsString(
+        $this->assertStringContainsStringIgnoringCase(
             'tidak ada transaksi yang menunggu konfirmasi',
             $processor->handle($this->phone, '1')
         );
