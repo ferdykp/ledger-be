@@ -194,10 +194,16 @@ class WhatsAppWorkflowTest extends TestCase
     {
         $processor = app(WhatsAppMessageProcessor::class);
         $processor->handle($this->phone, 'makan 35k gopay');
-        $this->assertSame('Transaksi dibatalkan.', $processor->handle($this->phone, '3'));
+        $this->assertStringContainsString(
+            'Transaksi Dibatalkan',
+            $processor->handle($this->phone, '3')
+        );
         $processor->handle($this->phone, 'makan 35k gopay');
         $this->travel(31)->minutes();
-        $this->assertStringContainsString('Tidak ada transaksi', $processor->handle($this->phone, '1'));
+        $this->assertStringContainsString(
+            'tidak ada transaksi yang menunggu konfirmasi',
+            $processor->handle($this->phone, '1')
+        );
         $processor->handle($this->phone, 'makan 35k gopay');
         $this->actingAs($this->user)->deleteJson('/api/integrations/whatsapp')->assertOk();
         $this->assertDatabaseCount('conversation_sessions', 0);

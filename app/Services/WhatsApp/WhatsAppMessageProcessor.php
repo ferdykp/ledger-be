@@ -499,11 +499,7 @@ class WhatsAppMessageProcessor
         ];
 
         if ($type === 'transfer') {
-            $lines[] = "💳 Dari: *{$accountName}*";
-
-            if ($targetName) {
-                $lines[] = "➡️ Ke: *{$targetName}*";
-            }
+            $lines[] = "💳 Transfer: {$accountName} → {$targetName}";
         } else {
             $lines[] = "💳 Dompet: *{$accountName}*";
             $lines[] = "📂 Kategori: {$category}";
@@ -549,7 +545,7 @@ class WhatsAppMessageProcessor
         $accountName = $transaction->account->name;
 
         $lines = [
-            'Transaksi berhasil disimpan di Ledger.',
+            '✅ Tersimpan! Transaksi berhasil dicatat di Ledger.',
             "💵 *{$amount}*",
             "💳 Dompet: *{$accountName}*",
         ];
