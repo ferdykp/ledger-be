@@ -23,6 +23,7 @@ class WhatsAppMessageProcessor
         private QuickAddParser $parser,
         private GroqParser $groq,
         private TransactionService $transactions,
+        private WhatsAppCommandService $commands,
     ) {}
 
     /** Return a reply for durable delivery; never send network replies inside a financial transaction. */
@@ -48,7 +49,12 @@ class WhatsAppMessageProcessor
 
             $command = Str::lower(trim($text));
             if (in_array($command, ['bantuan', 'help', 'panduan', 'halo ledger'], true)) {
-                return "📒 Panduan Ledger\n\n• bensin 50rb bca\n• makan 35k gopay\n• gaji 1.000.000 bca\n• transfer 50rb bca ke gopay\n\nGunakan nama dompet di Ledger. Balas 1 untuk simpan atau 3 untuk batal setelah ringkasan muncul.";
+                return "📒 Panduan Ledger\n\nCatat transaksi:\n• bensin 50rb bca\n• makan 35k gopay\n• gaji 1.000.000 bca\n• transfer 50rb bca ke gopay\n\nCek keuangan:\n• dompet\n• saldo bca\n• ringkasan hari ini\n• ringkasan bulan ini\n• 5 transaksi terakhir\n\nGunakan nama dompet di Ledger. Balas 1 untuk simpan atau 3 untuk batal setelah ringkasan muncul.";
+            }
+            // Informational commands do not modify or clear a pending draft.
+            $informationalReply = $this->commands->respond($user, $command);
+            if ($informationalReply !== null) {
+                return $informationalReply;
             }
             if ($session->state === 'waiting_confirmation') {
                 return $this->confirmation($user, $session, $command);
@@ -69,7 +75,7 @@ class WhatsAppMessageProcessor
         if ($draft['type'] !== 'transfer' && ! $draft['account_id'] && preg_match('/\b\d[\d.,]*\s*(?:rb|ribu|k|jt|juta)?\s+(?:(?:masuk|dari|pakai|via|ke|di)\s+)?([\pL][\pL\pN ._-]{0,39})$/iu', $text, $match)) {
             $available = $accounts->pluck('name')->implode(', ');
 
-            return "Dompet {$match[1]} belum tersedia. Transaksi belum dicatat.\nDompet tersedia: ".($available ?: 'Belum ada').'.';
+            return "Dompet {$match[1]} belum tersedia. Transaksi belum dicatat.\nDompet tersedia: " . ($available ?: 'Belum ada') . '.';
         }
         // Transfer direction is determined only by explicit local parsing, not AI guesses.
         if ($draft['type'] !== 'transfer' && ($draft['confidence'] < 0.75 || count($draft['missing']))) {
@@ -77,7 +83,7 @@ class WhatsAppMessageProcessor
         }
         $payload = $this->payload($draft);
         if (Validator::make($payload, TransactionRules::forUser($user, $payload['type']))->fails()) {
-            return "Nominal, kategori, tanggal, atau dompet belum valid. Transaksi belum dicatat.\nContoh: bensin 50rb bca; transfer 50rb bca ke gopay.\nDompet tersedia: ".$accounts->pluck('name')->implode(', ');
+            return "Nominal, kategori, tanggal, atau dompet belum valid. Transaksi belum dicatat.\nContoh: bensin 50rb bca; transfer 50rb bca ke gopay.\nDompet tersedia: " . $accounts->pluck('name')->implode(', ');
         }
         $account = $accounts->firstWhere('id', $payload['account_id']);
         $target = $accounts->firstWhere('id', $payload['to_account_id']);
@@ -87,10 +93,10 @@ class WhatsAppMessageProcessor
         $draft['account_name'] = $account->name;
         $draft['related_account_name'] = $target?->name;
         $session->update(['state' => 'waiting_confirmation', 'context' => $draft, 'expires_at' => now()->addMinutes(30)]);
-        $wallets = $account->name.($target ? ' → '.$target->name : '');
+        $wallets = $account->name . ($target ? ' → ' . $target->name : '');
         $amount = number_format($payload['amount'], 2, ',', '.');
 
-        return "Konfirmasi transaksi:\n".strtoupper($payload['type'])." • Rp{$amount}\n{$wallets}\n{$payload['date']} • ".($draft['category_name'] ?: 'Tanpa kategori')."\n{$payload['note']}\n\nBalas 1 / CONFIRM untuk simpan, atau 3 / CANCEL untuk batal.";
+        return "Konfirmasi transaksi:\n" . strtoupper($payload['type']) . " • Rp{$amount}\n{$wallets}\n{$payload['date']} • " . ($draft['category_name'] ?: 'Tanpa kategori') . "\n{$payload['note']}\n\nBalas 1 / CONFIRM untuk simpan, atau 3 / CANCEL untuk batal.";
     }
 
     private function confirmation(User $user, ConversationSession $session, string $command): string
@@ -115,7 +121,7 @@ class WhatsAppMessageProcessor
         $transaction = $this->transactions->createTransaction($user, $validator->validated());
         $this->clear($session);
 
-        return '✅ Tersimpan: '.strtoupper($transaction->type).' Rp'.number_format($transaction->amount, 2, ',', '.').' • '.$transaction->account->name;
+        return '✅ Tersimpan: ' . strtoupper($transaction->type) . ' Rp' . number_format($transaction->amount, 2, ',', '.') . ' • ' . $transaction->account->name;
     }
 
     private function payload(array $draft): array

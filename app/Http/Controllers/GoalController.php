@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\Goal\AddContributionRequest;
 use App\Http\Requests\Goal\StoreGoalRequest;
+use App\Http\Resources\GoalContributionResource;
 use App\Http\Resources\GoalResource;
 use App\Models\Goal;
 use Illuminate\Http\JsonResponse;
@@ -16,7 +17,6 @@ class GoalController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $goals = Goal::where('user_id', $request->user()->id)
-            ->with(['contributions' => fn ($q) => $q->orderBy('date', 'desc')])
             ->orderBy('created_at', 'desc')
             ->get();
 
@@ -46,8 +46,18 @@ class GoalController extends Controller
         $this->authorizeOwner($request->user()->id, $goal);
 
         return response()->json([
-            'data' => new GoalResource($goal->load(['contributions' => fn ($q) => $q->orderBy('date', 'desc')])),
+            'data' => new GoalResource($goal),
         ]);
+    }
+
+    public function contributions(Request $request, Goal $goal): AnonymousResourceCollection
+    {
+        $this->authorizeOwner($request->user()->id, $goal);
+        $request->validate(['page' => ['sometimes', 'integer', 'min:1']]);
+
+        return GoalContributionResource::collection(
+            $goal->contributions()->orderByDesc('date')->orderByDesc('id')->paginate(20)
+        );
     }
 
     public function update(StoreGoalRequest $request, Goal $goal): JsonResponse
@@ -90,7 +100,7 @@ class GoalController extends Controller
 
         return response()->json([
             'message' => 'Berhasil menambah tabungan!',
-            'data' => new GoalResource($goal->fresh(['contributions'])),
+            'data' => new GoalResource($goal->fresh()),
         ]);
     }
 

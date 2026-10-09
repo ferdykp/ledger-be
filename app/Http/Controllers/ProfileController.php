@@ -22,10 +22,14 @@ class ProfileController extends Controller
             }
             $user->update($data);
         } catch (\Throwable $error) {
-            if ($newAvatar) Storage::disk('public')->delete($newAvatar);
+            if ($newAvatar) {
+                Storage::disk('public')->delete($newAvatar);
+            }
             throw $error;
         }
-        if ($newAvatar && $oldAvatar) Storage::disk('public')->delete($oldAvatar);
+        if ($newAvatar && $oldAvatar) {
+            Storage::disk('public')->delete($oldAvatar);
+        }
 
         return response()->json([
             'message' => 'Profil berhasil diperbarui.',

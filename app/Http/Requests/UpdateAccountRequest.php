@@ -2,4 +2,4 @@
 
 namespace App\Http\Requests;
 
-class UpdateAccountRequest extends \App\Http\Requests\Account\UpdateAccountRequest {}
+class UpdateAccountRequest extends Account\UpdateAccountRequest {}

@@ -8,6 +8,7 @@ use App\Services\WhatsApp\EvolutionProvider;
 use App\Services\WhatsApp\WhatsAppMessageProcessor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class WhatsAppWebhookController extends Controller
@@ -47,8 +48,8 @@ class WhatsAppWebhookController extends Controller
             // Commit the financial change, session state and reply together.
             $message->update(['processed_at' => now(), 'reply_text' => $reply]);
         }, 3);
-        $sent = DB::transaction(function () use ($message, $provider) {
-            $message = WhatsAppMessage::whereKey($message->id)->lockForUpdate()->firstOrFail();
+        $sent = Cache::lock('whatsapp:reply:'.$message->id, 30)->get(function () use ($message, $provider) {
+            $message = $message->fresh();
             if ($message->replied_at || ! $message->reply_text) {
                 return true;
             }

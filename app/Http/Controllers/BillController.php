@@ -3,11 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Models\Bill;
+use App\Services\BillService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class BillController extends Controller
 {
+    public function __construct(private BillService $bills) {}
+
     private function rules(): array
     {
         return [
@@ -24,18 +26,32 @@ class BillController extends Controller
 
     public function index(Request $request)
     {
-        return response()->json(['data' => $request->user()->bills()->orderBy('due_date')->get()]);
+        $data = $request->validate([
+            'page' => ['sometimes', 'integer', 'min:1'],
+            'today' => ['sometimes', 'date_format:Y-m-d'],
+        ]);
+        $today = $data['today'] ?? now()->toDateString();
+        $active = $request->user()->bills()->where('status', 'active');
+        $summary = (clone $active)->selectRaw("COUNT(*) AS active_count, COALESCE(SUM(amount * CASE frequency WHEN 'yearly' THEN 1.0/12 WHEN 'weekly' THEN 52.0/12 WHEN 'monthly' THEN 1 ELSE 0 END), 0) AS monthly_total")->first();
+        $overdue = (clone $active)->where('reminder_enabled', true)->whereDate('due_date', '<=', $today)->count();
+        $page = $request->user()->bills()->orderBy('due_date')->orderBy('id')->paginate(20);
+
+        return response()->json([...$page->toArray(), 'summary' => [
+            'active_count' => (int) $summary->active_count,
+            'monthly_total' => (float) $summary->monthly_total,
+            'overdue_count' => $overdue,
+        ]]);
     }
 
     public function store(Request $request)
     {
-        return response()->json(['data' => $request->user()->bills()->create($request->validate($this->rules()))], 201);
+        return response()->json(['data' => $this->bills->save($request->user(), $request->validate($this->rules()))], 201);
     }
 
     public function update(Request $request, Bill $bill)
     {
         abort_unless($bill->user_id === $request->user()->id, 403);
-        $bill->update($request->validate($this->rules()));
+        $bill = $this->bills->save($request->user(), $request->validate($this->rules()), $bill);
 
         return response()->json(['data' => $bill->fresh()]);
     }
@@ -51,26 +67,7 @@ class BillController extends Controller
     public function markPaid(Request $request, Bill $bill)
     {
         abort_unless($bill->user_id === $request->user()->id, 403);
-        $bill = DB::transaction(function () use ($bill) {
-            $bill = Bill::lockForUpdate()->findOrFail($bill->id);
-            if ($bill->status === 'paid') {
-                return $bill;
-            }
-            $bill->update(['status' => 'paid']);
-            $nextDate = match ($bill->frequency) {
-                'weekly' => $bill->due_date->copy()->addWeek(),
-                'monthly' => $bill->due_date->copy()->addMonthNoOverflow(),
-                'yearly' => $bill->due_date->copy()->addYearNoOverflow(),
-                default => null,
-            };
-            if ($nextDate) {
-                $next = $bill->replicate();
-                $next->fill(['status' => 'active', 'due_date' => $nextDate]);
-                $next->save();
-            }
-
-            return $bill;
-        });
+        $bill = $this->bills->save($request->user(), ['status' => 'paid'], $bill);
 
         return response()->json(['data' => $bill]);
     }

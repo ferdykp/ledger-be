@@ -41,7 +41,9 @@ class BudgetController extends Controller
                 ->whereIn('category_id', $group->pluck('category_id'))
                 ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
                 ->groupBy('category_id')->selectRaw('category_id, SUM(amount) as total')->pluck('total', 'category_id');
-            foreach ($group as $budget) $budget->setAttribute('spent_total', $spent[$budget->category_id] ?? 0);
+            foreach ($group as $budget) {
+                $budget->setAttribute('spent_total', $spent[$budget->category_id] ?? 0);
+            }
         }
 
         return BudgetResource::collection($budgets);

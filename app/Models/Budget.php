@@ -37,8 +37,8 @@ class Budget extends Model
     // Hitung realisasi pengeluaran dalam rentang bulan budget
     public function getSpentAmountAttribute(): float
     {
-        if (array_key_exists("spent_total", $this->attributes)) {
-            return (float) $this->attributes["spent_total"];
+        if (array_key_exists('spent_total', $this->attributes)) {
+            return (float) $this->attributes['spent_total'];
         }
         if (! $this->category_id) {
             return 0.0;

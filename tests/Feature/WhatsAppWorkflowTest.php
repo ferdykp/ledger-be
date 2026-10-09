@@ -11,6 +11,8 @@ use App\Services\QuickAdd\QuickAddParser;
 use App\Services\WhatsApp\EvolutionProvider;
 use App\Services\WhatsApp\WhatsAppMessageProcessor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use Tests\TestCase;
@@ -39,8 +41,45 @@ class WhatsAppWorkflowTest extends TestCase
     {
         return $this->postJson('/api/webhooks/whatsapp', [
             'event' => 'messages.upsert',
-            'data' => ['key' => [...['id' => $id, 'remoteJid' => $this->phone.'@s.whatsapp.net', 'fromMe' => false], ...$key], 'message' => ['conversation' => $text]],
+            'data' => ['key' => [...['id' => $id, 'remoteJid' => $this->phone . '@s.whatsapp.net', 'fromMe' => false], ...$key], 'message' => ['conversation' => $text]],
         ], ['X-Ledger-Webhook-Secret' => 'test-secret']);
+    }
+
+    public function test_reply_delivery_does_not_hold_a_database_transaction(): void
+    {
+        $level = DB::transactionLevel();
+        $this->mock(EvolutionProvider::class, function ($mock) use ($level) {
+            $mock->shouldReceive('sendText')->once()->andReturnUsing(function () use ($level) {
+                $this->assertSame($level, DB::transactionLevel());
+
+                return true;
+            });
+        });
+        $this->webhook('outside-transaction', 'bantuan')->assertOk();
+        $this->webhook('outside-transaction', 'bantuan')->assertOk();
+    }
+
+    public function test_concurrent_reply_attempt_is_retryable_and_sends_once(): void
+    {
+        $message = WhatsAppMessage::create([
+            'provider_message_id' => 'locked-reply',
+            'phone_number' => $this->phone,
+            'message_type' => 'text',
+            'body' => 'bantuan',
+            'processed_at' => now(),
+            'reply_text' => 'Help',
+        ]);
+        $lock = Cache::lock('whatsapp:reply:' . $message->id, 30);
+        $this->assertTrue($lock->get());
+        $this->mock(EvolutionProvider::class, fn($mock) => $mock->shouldReceive('sendText')->once()->andReturn(true));
+        try {
+            $this->webhook('locked-reply', 'bantuan')->assertStatus(502)->assertJsonPath('reply_pending', true);
+            $this->assertNull($message->fresh()->replied_at);
+        } finally {
+            $lock->release();
+        }
+        $this->webhook('locked-reply', 'bantuan')->assertOk();
+        $this->webhook('locked-reply', 'bantuan')->assertOk();
     }
 
     public function test_amount_formats_and_transfer_direction_are_not_database_order(): void
@@ -175,5 +214,32 @@ class WhatsAppWorkflowTest extends TestCase
             Http::fake(['api.groq.com/*' => Http::response(['choices' => [['message' => ['content' => $content]]]])]);
             $this->assertNull(app(GroqParser::class)->parse($this->user, 'makan'));
         }
+    }
+    public function test_financial_information_commands_are_scoped_and_do_not_create_transactions(): void
+    {
+        $processor = app(WhatsAppMessageProcessor::class);
+        $other = User::factory()->create();
+        $other->accounts()->create(['name' => 'rahasia', 'type' => 'bank', 'balance' => 9999999]);
+        $this->assertStringContainsString('bca', $processor->handle($this->phone, 'dompet'));
+        $this->assertStringNotContainsString('rahasia', $processor->handle($this->phone, 'dompet'));
+        $this->assertStringContainsString('Rp2.000.000', $processor->handle($this->phone, 'saldo bca'));
+        $this->assertStringContainsString('tidak ditemukan', $processor->handle($this->phone, 'saldo rahasia'));
+        $this->assertStringContainsString('Pemasukan', $processor->handle($this->phone, 'ringkasan hari ini'));
+        $this->assertStringContainsString('Pengeluaran', $processor->handle($this->phone, 'ringkasan bulan ini'));
+        $this->assertStringContainsString('Belum ada transaksi', $processor->handle($this->phone, '5 transaksi terakhir'));
+        $this->assertDatabaseCount('transactions', 0);
+    }
+
+    public function test_information_commands_preserve_pending_confirmation(): void
+    {
+        $processor = app(WhatsAppMessageProcessor::class);
+        $processor->handle($this->phone, 'bensin 50rb bca');
+        $this->assertSame('waiting_confirmation', ConversationSession::first()->state);
+        $this->assertStringContainsString('Saldo bca', $processor->handle($this->phone, 'saldo bca'));
+        $this->assertSame('waiting_confirmation', ConversationSession::first()->fresh()->state);
+        $this->assertDatabaseCount('transactions', 0);
+        $this->assertStringContainsString('Tersimpan', $processor->handle($this->phone, '1'));
+        $this->assertDatabaseCount('transactions', 1);
+        $this->assertStringContainsString('50.000', $processor->handle($this->phone, '5 transaksi terakhir'));
     }
 }

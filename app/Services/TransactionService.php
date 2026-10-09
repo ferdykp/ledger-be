@@ -155,13 +155,19 @@ class TransactionService
         $months = max(1, min($months, 24));
         $now = now()->startOfMonth();
 
-        return collect(range($months - 1, 0))->map(function ($offset) use ($user, $now) {
-            $d = $now->copy()->subMonths($offset);
-            $r = Transaction::where('user_id', $user->id)->whereYear('date', $d->year)->whereMonth('date', $d->month)
-                ->selectRaw("COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) income, COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) expense")->first();
+        $start = $now->copy()->subMonths($months - 1);
+        $totals = Transaction::where('user_id', $user->id)
+            ->whereBetween('date', [$start->toDateString(), $now->copy()->endOfMonth()->toDateString()])
+            ->selectRaw("SUBSTR(date, 1, 7) AS month, SUM(CASE WHEN type='income' THEN amount ELSE 0 END) AS income, SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) AS expense")
+            ->groupByRaw('SUBSTR(date, 1, 7)')->get()->keyBy('month');
 
-            return ['month' => $d->format('Y-m'), 'label' => $d->locale('id')->translatedFormat('M'), 'income' => (float) $r->income, 'expense' => (float) $r->expense];
-        })->values()->all();
+        return collect(range($months - 1, 0))->map(function ($offset) use ($totals, $now) {
+            $date = $now->copy()->subMonths($offset);
+            $total = $totals->get($date->format('Y-m'));
+
+            return ['month' => $date->format('Y-m'), 'label' => $date->locale('id')->translatedFormat('M'),
+                'income' => (float) ($total?->income ?? 0), 'expense' => (float) ($total?->expense ?? 0)];
+        })->all();
     }
 
     private function lockAccounts(User $user, array $ids): void
