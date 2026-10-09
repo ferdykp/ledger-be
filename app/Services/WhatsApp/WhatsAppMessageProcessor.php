@@ -48,15 +48,8 @@ class WhatsAppMessageProcessor
             }
 
             $command = Str::lower(trim($text));
-            if (in_array($command, [
-                'bantuan',
-                'help',
-                'panduan',
-                'halo ledger',
-                'menu',
-                'commands',
-            ], true)) {
-                return $this->commands->help();
+            if (in_array($command, ['bantuan', 'help', 'panduan', 'halo ledger'], true)) {
+                return "📒 Panduan Ledger\n\nCatat transaksi:\n• bensin 50rb bca\n• makan 35k gopay\n• gaji 1.000.000 bca\n• transfer 50rb bca ke gopay\n\nCek keuangan:\n• dompet\n• saldo bca\n• ringkasan hari ini\n• ringkasan bulan ini\n• 5 transaksi terakhir\n\nGunakan nama dompet di Ledger. Balas 1 untuk simpan atau 3 untuk batal setelah ringkasan muncul.";
             }
             // Informational commands do not modify or clear a pending draft.
             $informationalReply = $this->commands->respond($user, $command);
@@ -67,17 +60,7 @@ class WhatsAppMessageProcessor
                 return $this->confirmation($user, $session, $command);
             }
             if (in_array($command, [...self::CONFIRM, ...self::CANCEL], true)) {
-                return implode("\n", [
-                    "ℹ️ *TIDAK ADA TRANSAKSI TERTUNDA*",
-                    "",
-                    "Saat ini tidak ada transaksi yang menunggu konfirmasi.",
-                    "",
-                    "Untuk membuat transaksi baru, cukup kirim pesan seperti:",
-                    "",
-                    "`bensin 50rb bca`",
-                    "",
-                    "Ketik `bantuan` untuk melihat perintah lainnya.",
-                ]);
+                return 'Tidak ada transaksi yang menunggu konfirmasi. Kirim detail transaksi baru.';
             }
 
             return $this->draft($user, $session, trim($text));
@@ -113,72 +96,7 @@ class WhatsAppMessageProcessor
         $wallets = $account->name . ($target ? ' → ' . $target->name : '');
         $amount = number_format($payload['amount'], 2, ',', '.');
 
-        $typeLabel = match ($payload['type']) {
-            'income' => 'PEMASUKAN',
-            'expense' => 'PENGELUARAN',
-            'transfer' => 'TRANSFER ANTAR-DOMPET',
-            default => 'TRANSAKSI',
-        };
-
-        $typeIcon = match ($payload['type']) {
-            'income' => '📥',
-            'expense' => '📤',
-            'transfer' => '🔄',
-            default => '🧾',
-        };
-
-        $amount = 'Rp' . number_format(
-            (float) $payload['amount'],
-            0,
-            ',',
-            '.'
-        );
-
-        $date = \Illuminate\Support\Carbon::parse(
-            $payload['date']
-        )->translatedFormat('d F Y');
-
-        $category = $draft['category_name'] ?: 'Tanpa kategori';
-        $note = trim((string) ($payload['note'] ?? ''));
-
-        return implode("\n", [
-            "📝 *KONFIRMASI TRANSAKSI*",
-            "",
-            "Transaksi berhasil diproses dan siap diperiksa.",
-            "Pastikan seluruh informasi berikut sudah sesuai.",
-            "",
-            "{$typeIcon} *{$typeLabel}*",
-            "",
-            "💰 *Nominal*",
-            "*{$amount}*",
-            "",
-            "👛 *Dompet Asal*",
-            $account->name,
-            ...($target ? [
-                "",
-                "🎯 *Dompet Tujuan*",
-                $target->name,
-            ] : []),
-            "",
-            "📂 *Kategori*",
-            $category,
-            "",
-            "📅 *Tanggal*",
-            $date,
-            "",
-            "🗒️ *Catatan*",
-            $note !== '' ? $note : 'Tidak ada catatan',
-            "",
-            "━━━━━━━━━━━━━━━━",
-            "✦ *PILIH TINDAKAN*",
-            "",
-            "✅ Balas *1* untuk menyimpan.",
-            "❌ Balas *3* untuk membatalkan.",
-            "",
-            "⏳ Konfirmasi berlaku selama 30 menit.",
-            "",
-            "_Transaksi belum tersimpan sebelum kamu melakukan konfirmasi._",
-        ]);
+        return "Konfirmasi transaksi:\n" . strtoupper($payload['type']) . " • Rp{$amount}\n{$wallets}\n{$payload['date']} • " . ($draft['category_name'] ?: 'Tanpa kategori') . "\n{$payload['note']}\n\nBalas 1 / CONFIRM untuk simpan, atau 3 / CANCEL untuk batal.";
     }
 
     private function confirmation(User $user, ConversationSession $session, string $command): string
@@ -186,15 +104,7 @@ class WhatsAppMessageProcessor
         if (in_array($command, self::CANCEL, true)) {
             $this->clear($session);
 
-            return implode("\n", [
-                "❌ *TRANSAKSI DIBATALKAN*",
-                "",
-                "Transaksi tidak disimpan dan saldo dompetmu tidak berubah.",
-                "",
-                "Kamu bisa mengirim detail transaksi baru kapan saja.",
-                "",
-                "💡 Ketik `bantuan` untuk melihat panduan Ledger.",
-            ]);
+            return 'Transaksi dibatalkan.';
         }
         if (! in_array($command, self::CONFIRM, true)) {
             return 'Balas 1 / CONFIRM untuk simpan atau 3 / CANCEL untuk batal.';
@@ -211,42 +121,7 @@ class WhatsAppMessageProcessor
         $transaction = $this->transactions->createTransaction($user, $validator->validated());
         $this->clear($session);
 
-        $typeLabel = match ($transaction->type) {
-            'income' => 'Pemasukan',
-            'expense' => 'Pengeluaran',
-            'transfer' => 'Transfer Antar-Dompet',
-            default => 'Transaksi',
-        };
-
-        $amount = 'Rp' . number_format(
-            (float) $transaction->amount,
-            0,
-            ',',
-            '.'
-        );
-
-        return implode("\n", [
-            "✅ *TRANSAKSI BERHASIL DISIMPAN*",
-            "",
-            "Transaksimu telah tercatat di Ledger.",
-            "",
-            "🧾 *Jenis Transaksi*",
-            $typeLabel,
-            "",
-            "💰 *Nominal*",
-            "*{$amount}*",
-            "",
-            "👛 *Dompet*",
-            $transaction->account->name,
-            "",
-            "━━━━━━━━━━━━━━━━",
-            "✨ Catatan keuanganmu sudah diperbarui.",
-            "",
-            "Ketik `saldo " . Str::lower($transaction->account->name)
-                . "` untuk melihat saldo terbaru.",
-            "",
-            "_Ledger • Transaction Recorded_",
-        ]);
+        return '✅ Tersimpan: ' . strtoupper($transaction->type) . ' Rp' . number_format($transaction->amount, 2, ',', '.') . ' • ' . $transaction->account->name;
     }
 
     private function payload(array $draft): array
