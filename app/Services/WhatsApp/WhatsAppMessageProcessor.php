@@ -9,26 +9,15 @@ use App\Services\AI\GroqParser;
 use App\Services\QuickAdd\QuickAddParser;
 use App\Services\TransactionService;
 use App\Support\TransactionRules;
-use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 
 class WhatsAppMessageProcessor
 {
-    private const CONFIRM = [
-        '1',
-        'confirm',
-        'konfirmasi',
-        'ya',
-        'yes',
-    ];
+    private const CONFIRM = ['1', 'confirm', 'konfirmasi', 'ya', 'yes'];
 
-    private const CANCEL = [
-        '3',
-        'cancel',
-        'batal',
-    ];
+    private const CANCEL = ['3', 'cancel', 'batal'];
 
     public function __construct(
         private QuickAddParser $parser,
@@ -37,758 +26,143 @@ class WhatsAppMessageProcessor
         private WhatsAppCommandService $commands,
     ) {}
 
-    /**
-     * Process an incoming WhatsApp message.
-     *
-     * Return the reply text for delivery by the webhook.
-     * Do not send network requests inside the transaction.
-     */
+    /** Return a reply for durable delivery; never send network replies inside a financial transaction. */
     public function handle(string $phone, string $text): string
     {
         return DB::transaction(function () use ($phone, $text) {
-
-            $connection = WhatsAppConnection::where(
-                'phone_number',
-                $phone
-            )
-                ->where('status', 'connected')
-                ->first();
-
-            if (
-                ! $connection ||
-                preg_match('/^LINK\s+/i', trim($text))
-            ) {
-                return "🔐 *WhatsApp Belum Terhubung*\n\n"
-                    . "Nomor ini belum terhubung ke Ledger.\n\n"
-                    . "Buka *Ledger → Pengaturan → WhatsApp* "
-                    . "untuk menghubungkan nomor melalui verifikasi OTP.";
+            $connection = WhatsAppConnection::where('phone_number', $phone)->where('status', 'connected')->first();
+            if (! $connection || preg_match('/^LINK\s+/i', trim($text))) {
+                return 'Hubungkan nomor melalui kode OTP di Pengaturan > WhatsApp Ledger.';
             }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Lock User and Connection
-            |--------------------------------------------------------------------------
-            */
-
-            $user = User::whereKey(
-                $connection->user_id
-            )
-                ->lockForUpdate()
-                ->firstOrFail();
-
-            $connection = WhatsAppConnection::whereKey(
-                $connection->id
-            )
-                ->where('phone_number', $phone)
-                ->where('status', 'connected')
-                ->lockForUpdate()
-                ->first();
-
+            // Serialize session creation, draft changes and confirmation per user.
+            $user = User::whereKey($connection->user_id)->lockForUpdate()->firstOrFail();
+            $connection = WhatsAppConnection::whereKey($connection->id)->where('phone_number', $phone)->where('status', 'connected')->lockForUpdate()->first();
             if (! $connection) {
-                return "🔌 *Koneksi Terputus*\n\n"
-                    . "Nomor WhatsApp kamu sudah tidak terhubung.\n"
-                    . "Silakan lakukan verifikasi ulang melalui Ledger.";
+                return 'Koneksi WhatsApp telah diputuskan. Verifikasi ulang melalui Ledger.';
             }
-
-            $connection->update([
-                'last_message_at' => now(),
-            ]);
-
-            /*
-            |--------------------------------------------------------------------------
-            | Conversation Session
-            |--------------------------------------------------------------------------
-            */
-
-            $session = ConversationSession::firstOrCreate(
-                [
-                    'user_id' => $user->id,
-                ],
-                [
-                    'channel' => 'whatsapp',
-                    'state' => 'idle',
-                ]
-            );
-
-            $session = ConversationSession::whereKey(
-                $session->id
-            )
-                ->lockForUpdate()
-                ->firstOrFail();
-
+            $connection->update(['last_message_at' => now()]);
+            $session = ConversationSession::firstOrCreate(['user_id' => $user->id], ['channel' => 'whatsapp', 'state' => 'idle']);
+            $session = ConversationSession::whereKey($session->id)->lockForUpdate()->firstOrFail();
             if ($session->expires_at?->isPast()) {
                 $this->clear($session);
             }
 
             $command = Str::lower(trim($text));
-
-            /*
-            |--------------------------------------------------------------------------
-            | Help Commands
-            |--------------------------------------------------------------------------
-            */
-
-            if (in_array($command, [
-                'bantuan',
-                'help',
-                'panduan',
-                'halo ledger',
-            ], true)) {
-                return $this->helpMessage();
+            if (in_array($command, ['bantuan', 'help', 'panduan', 'halo ledger'], true)) {
+                return "📒 Panduan Ledger\n\nCatat transaksi:\n• bensin 50rb bca\n• makan 35k gopay\n• gaji 1.000.000 bca\n• transfer 50rb bca ke gopay\n\nCek keuangan:\n• dompet\n• saldo bca\n• ringkasan hari ini\n• ringkasan bulan ini\n• 5 transaksi terakhir\n\nGunakan nama dompet di Ledger. Balas 1 untuk simpan atau 3 untuk batal setelah ringkasan muncul.";
             }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Financial Information Commands
-            |--------------------------------------------------------------------------
-            |
-            | Informational commands must not clear
-            | or modify a pending transaction draft.
-            |
-            */
-
-            $informationalReply = $this->commands->respond(
-                $user,
-                $command
-            );
-
+            // Informational commands do not modify or clear a pending draft.
+            $informationalReply = $this->commands->respond($user, $command);
             if ($informationalReply !== null) {
                 return $informationalReply;
             }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Pending Confirmation
-            |--------------------------------------------------------------------------
-            */
-
             if ($session->state === 'waiting_confirmation') {
-                return $this->confirmation(
-                    $user,
-                    $session,
-                    $command
-                );
+                return $this->confirmation($user, $session, $command);
+            }
+            if (in_array($command, [...self::CONFIRM, ...self::CANCEL], true)) {
+                return 'Tidak ada transaksi yang menunggu konfirmasi. Kirim detail transaksi baru.';
             }
 
-            /*
-            |--------------------------------------------------------------------------
-            | Confirmation Without Pending Draft
-            |--------------------------------------------------------------------------
-            */
-
-            if (in_array($command, [
-                ...self::CONFIRM,
-                ...self::CANCEL,
-            ], true)) {
-                return "💬 *Belum Ada Transaksi*\n\n"
-                    . "Tidak ada transaksi yang menunggu konfirmasi.\n\n"
-                    . "Kirim detail transaksi baru untuk mulai mencatat.\n\n"
-                    . "✍️ _Contoh: bensin 50rb bca_";
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Create Transaction Draft
-            |--------------------------------------------------------------------------
-            */
-
-            return $this->draft(
-                $user,
-                $session,
-                trim($text)
-            );
+            return $this->draft($user, $session, trim($text));
         }, 3);
     }
 
-    /**
-     * Parse and validate a transaction draft.
-     */
-    private function draft(
-        User $user,
-        ConversationSession $session,
-        string $text
-    ): string {
-        $accounts = $user->accounts()
-            ->where('is_archived', false)
-            ->get();
+    private function draft(User $user, ConversationSession $session, string $text): string
+    {
+        $accounts = $user->accounts()->where('is_archived', false)->get();
+        $draft = $this->parser->parse($user, $text);
+        // A transfer contains two wallets: never interpret its entire tail as one wallet.
+        if ($draft['type'] !== 'transfer' && ! $draft['account_id'] && preg_match('/\b\d[\d.,]*\s*(?:rb|ribu|k|jt|juta)?\s+(?:(?:masuk|dari|pakai|via|ke|di)\s+)?([\pL][\pL\pN ._-]{0,39})$/iu', $text, $match)) {
+            $available = $accounts->pluck('name')->implode(', ');
 
-        $draft = $this->parser->parse(
-            $user,
-            $text
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Unknown Wallet Detection
-        |--------------------------------------------------------------------------
-        */
-
-        if (
-            $draft['type'] !== 'transfer'
-            && ! $draft['account_id']
-            && preg_match(
-                '/\b\d[\d.,]*\s*(?:rb|ribu|k|jt|juta)?\s+(?:(?:masuk|dari|pakai|via|ke|di)\s+)?([\pL][\pL\pN ._-]{0,39})$/iu',
-                $text,
-                $match
-            )
-        ) {
-            $available = $accounts
-                ->pluck('name')
-                ->implode(', ');
-
-            $walletName = trim($match[1]);
-
-            return "👛 *Dompet Tidak Ditemukan*\n\n"
-                . "Dompet *{$walletName}* belum tersedia di Ledger.\n\n"
-                . "💳 *Dompet tersedia:*\n"
-                . ($available ?: 'Belum ada dompet aktif.')
-                . "\n\n"
-                . "Silakan gunakan dompet yang tersedia.\n"
-                . "_Transaksi belum dicatat dan saldo tidak berubah._";
+            return "Dompet {$match[1]} belum tersedia. Transaksi belum dicatat.\nDompet tersedia: " . ($available ?: 'Belum ada') . '.';
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | AI Fallback
-        |--------------------------------------------------------------------------
-        |
-        | AI may fill missing information but must not
-        | override locally determined transfer direction.
-        |
-        */
-
-        if (
-            $draft['type'] !== 'transfer'
-            && (
-                $draft['confidence'] < 0.75
-                || count($draft['missing'])
-            )
-        ) {
-            $draft = $this->mergeAi(
-                $user,
-                $draft,
-                $text
-            );
+        // Transfer direction is determined only by explicit local parsing, not AI guesses.
+        if ($draft['type'] !== 'transfer' && ($draft['confidence'] < 0.75 || count($draft['missing']))) {
+            $draft = $this->mergeAi($user, $draft, $text);
         }
-
         $payload = $this->payload($draft);
-
-        /*
-        |--------------------------------------------------------------------------
-        | Validate Transaction
-        |--------------------------------------------------------------------------
-        */
-
-        $validator = Validator::make(
-            $payload,
-            TransactionRules::forUser(
-                $user,
-                $payload['type']
-            )
-        );
-
-        if ($validator->fails()) {
-            $available = $accounts
-                ->pluck('name')
-                ->implode(', ');
-
-            return "⚠️ *Transaksi Belum Bisa Diproses*\n\n"
-                . "Ada detail transaksi yang belum lengkap atau belum valid.\n\n"
-                . "✍️ *Contoh penulisan:*\n"
-                . "• bensin 50rb bca\n"
-                . "• makan 35k gopay\n"
-                . "• transfer 50rb bca ke gopay\n\n"
-                . "💳 *Dompet tersedia:*\n"
-                . ($available ?: 'Belum ada dompet aktif.')
-                . "\n\n"
-                . "_Transaksi belum disimpan._";
+        if (Validator::make($payload, TransactionRules::forUser($user, $payload['type']))->fails()) {
+            return "Nominal, kategori, tanggal, atau dompet belum valid. Transaksi belum dicatat.\nContoh: bensin 50rb bca; transfer 50rb bca ke gopay.\nDompet tersedia: " . $accounts->pluck('name')->implode(', ');
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Verify Active Wallets
-        |--------------------------------------------------------------------------
-        */
-
-        $account = $accounts->firstWhere(
-            'id',
-            $payload['account_id']
-        );
-
-        $target = $accounts->firstWhere(
-            'id',
-            $payload['to_account_id']
-        );
-
-        if (
-            ! $account ||
-            (
-                $payload['type'] === 'transfer'
-                && ! $target
-            )
-        ) {
-            return "👛 *Dompet Tidak Tersedia*\n\n"
-                . "Dompet yang dipilih tidak ditemukan atau sudah diarsipkan.\n\n"
-                . "Gunakan dompet aktif yang tersedia di Ledger.";
+        $account = $accounts->firstWhere('id', $payload['account_id']);
+        $target = $accounts->firstWhere('id', $payload['to_account_id']);
+        if (! $account || ($payload['type'] === 'transfer' && ! $target)) {
+            return 'Dompet tidak tersedia. Gunakan dompet aktif di Ledger.';
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Save Draft
-        |--------------------------------------------------------------------------
-        */
-
         $draft['account_name'] = $account->name;
         $draft['related_account_name'] = $target?->name;
+        $session->update(['state' => 'waiting_confirmation', 'context' => $draft, 'expires_at' => now()->addMinutes(30)]);
+        $wallets = $account->name . ($target ? ' → ' . $target->name : '');
+        $amount = number_format($payload['amount'], 2, ',', '.');
 
-        $session->update([
-            'state' => 'waiting_confirmation',
-            'context' => $draft,
-            'expires_at' => now()->addMinutes(30),
-        ]);
-
-        /*
-        |--------------------------------------------------------------------------
-        | Confirmation Preview
-        |--------------------------------------------------------------------------
-        */
-
-        return $this->confirmationMessage(
-            $payload,
-            $draft,
-            $account->name,
-            $target?->name
-        );
+        return "Konfirmasi transaksi:\n" . strtoupper($payload['type']) . " • Rp{$amount}\n{$wallets}\n{$payload['date']} • " . ($draft['category_name'] ?: 'Tanpa kategori') . "\n{$payload['note']}\n\nBalas 1 / CONFIRM untuk simpan, atau 3 / CANCEL untuk batal.";
     }
 
-    /**
-     * Confirm or cancel a pending transaction.
-     */
-    private function confirmation(
-        User $user,
-        ConversationSession $session,
-        string $command
-    ): string {
-        /*
-        |--------------------------------------------------------------------------
-        | Cancel
-        |--------------------------------------------------------------------------
-        */
-
+    private function confirmation(User $user, ConversationSession $session, string $command): string
+    {
         if (in_array($command, self::CANCEL, true)) {
             $this->clear($session);
 
-            return "↩️ *Transaksi Dibatalkan*\n\n"
-                . "Oke, transaksi tadi sudah dibatalkan.\n"
-                . "Tidak ada perubahan pada saldo dompet kamu.\n\n"
-                . "Kirim transaksi baru kapan saja. 😊";
+            return 'Transaksi dibatalkan.';
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Unknown Confirmation Command
-        |--------------------------------------------------------------------------
-        */
-
         if (! in_array($command, self::CONFIRM, true)) {
-            return "⏳ *Menunggu Konfirmasi*\n\n"
-                . "Transaksi kamu sudah siap, tetapi belum disimpan.\n\n"
-                . "*1* — Simpan transaksi\n"
-                . "*3* — Batalkan transaksi\n\n"
-                . "_Konfirmasi berlaku selama 30 menit._";
+            return 'Balas 1 / CONFIRM untuk simpan atau 3 / CANCEL untuk batal.';
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Revalidate Pending Draft
-        |--------------------------------------------------------------------------
-        */
-
-        $confirmedDraft = $session->context ?? [];
-
-        $payload = $this->payload(
-            $confirmedDraft
-        );
-
-        $validator = Validator::make(
-            $payload,
-            TransactionRules::forUser(
-                $user,
-                $payload['type']
-            )
-        );
-
-        $ids = array_filter([
-            $payload['account_id'],
-            $payload['to_account_id'],
-        ]);
-
-        $active = $user->accounts()
-            ->whereIn('id', $ids)
-            ->where('is_archived', false)
-            ->count();
-
-        if (
-            $validator->fails()
-            || $active !== count(array_unique($ids))
-        ) {
+        $payload = $this->payload($session->context ?? []);
+        $validator = Validator::make($payload, TransactionRules::forUser($user, $payload['type']));
+        $ids = array_filter([$payload['account_id'], $payload['to_account_id']]);
+        $active = $user->accounts()->whereIn('id', $ids)->where('is_archived', false)->count();
+        if ($validator->fails() || $active !== count(array_unique($ids))) {
             $this->clear($session);
 
-            return "⚠️ *Transaksi Tidak Dapat Disimpan*\n\n"
-                . "Detail transaksi tidak valid atau sudah berubah.\n\n"
-                . "Silakan kirim ulang transaksi dengan informasi terbaru.\n"
-                . "_Saldo kamu belum berubah._";
+            return 'Detail transaksi tidak valid atau sudah berubah. Kirim ulang transaksi; saldo belum diubah.';
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Save Transaction
-        |--------------------------------------------------------------------------
-        */
-
-        $transaction = $this->transactions
-            ->createTransaction(
-                $user,
-                $validator->validated()
-            );
-
+        $transaction = $this->transactions->createTransaction($user, $validator->validated());
         $this->clear($session);
 
-        return $this->successMessage(
-            $transaction,
-            $confirmedDraft
-        );
+        return '✅ Tersimpan: ' . strtoupper($transaction->type) . ' Rp' . number_format($transaction->amount, 2, ',', '.') . ' • ' . $transaction->account->name;
     }
 
-    /**
-     * Transaction confirmation preview.
-     */
-    private function confirmationMessage(
-        array $payload,
-        array $draft,
-        string $accountName,
-        ?string $targetName
-    ): string {
-        $type = $payload['type'];
-
-        $title = match ($type) {
-            'income' => '💰 *Konfirmasi Pemasukan*',
-            'transfer' => '🔄 *Konfirmasi Transfer*',
-            default => '💸 *Konfirmasi Pengeluaran*',
-        };
-
-        $typeLabel = match ($type) {
-            'income' => 'Pemasukan',
-            'transfer' => 'Transfer',
-            default => 'Pengeluaran',
-        };
-
-        $amount = $this->rupiah(
-            $payload['amount']
-        );
-
-        $date = $this->formatDate(
-            $payload['date']
-        );
-
-        $category = $draft['category_name']
-            ?? 'Tanpa kategori';
-
-        $note = trim(
-            (string) ($payload['note'] ?? '')
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Build WhatsApp Message
-        |--------------------------------------------------------------------------
-        */
-
-        $message = $title . "\n\n";
-
-        $message .= "Berikut detail transaksi kamu:\n\n";
-
-        $message .= "💵 *{$amount}*\n";
-
-        $message .= "━━━━━━━━━━━━━━━━\n";
-
-        $message .= "🏷️ Jenis: {$typeLabel}\n";
-
-        if ($type === 'transfer') {
-            $message .= "💳 Dompet: {$accountName} → {$targetName}\n";
-        } else {
-            $message .= "💳 Dompet: {$accountName}\n";
-            $message .= "📂 Kategori: {$category}\n";
-        }
-
-        $message .= "📅 Tanggal: {$date}\n";
-
-        if ($note !== '') {
-            $message .= "📝 Catatan: {$note}\n";
-        }
-
-        $message .= "━━━━━━━━━━━━━━━━\n\n";
-
-        $message .= "*Sudah sesuai?*\n\n";
-
-        $message .= "*1* — Simpan transaksi\n";
-        $message .= "*3* — Batalkan transaksi\n\n";
-
-        $message .= "_Konfirmasi berlaku selama 30 menit._";
-
-        return $message;
-    }
-
-    /**
-     * Successful transaction response.
-     */
-    private function successMessage(
-        $transaction,
-        array $draft = []
-    ): string {
-        $type = $transaction->type;
-
-        $title = match ($type) {
-            'income' => '💰 *Pemasukan Berhasil Dicatat!*',
-            'transfer' => '🔄 *Transfer Berhasil Dicatat!*',
-            default => '✅ *Pengeluaran Berhasil Dicatat!*',
-        };
-
-        $amount = $this->rupiah(
-            $transaction->amount
-        );
-
-        $accountName = $transaction->account->name;
-
-        $message = $title . "\n\n";
-
-        $message .= "✅ Tersimpan! Transaksi berhasil dicatat di Ledger.\n\n";
-
-        $message .= "💵 *{$amount}*\n";
-
-        if ($type === 'transfer') {
-            $targetName = $draft['related_account_name']
-                ?? null;
-
-            $message .= "💳 Dari: {$accountName}\n";
-
-            if ($targetName) {
-                $message .= "➡️ Ke: {$targetName}\n";
-            }
-        } else {
-            $message .= "💳 Dompet: {$accountName}\n";
-        }
-
-        $message .= "\n━━━━━━━━━━━━━━━━\n\n";
-
-        $message .= "Keuangan kamu sudah diperbarui. ✨\n\n";
-
-        $message .= "_Ketik *dompet* untuk melihat saldo terbaru._";
-
-        return $message;
-    }
-
-    /**
-     * Help menu.
-     *
-     * Uses a simple text response to preserve
-     * compatibility with the existing webhook.
-     */
-    private function helpMessage(): string
-    {
-        return "📒 *Panduan Ledger*\n\n"
-            . "Halo! 👋\n"
-            . "Aku siap membantu kamu mencatat dan memantau keuangan langsung dari WhatsApp.\n\n"
-
-            . "✍️ *CATAT TRANSAKSI*\n"
-            . "• bensin 50rb bca\n"
-            . "• makan 35k gopay\n"
-            . "• gaji 1.000.000 bca\n"
-            . "• transfer 50rb bca ke gopay\n\n"
-
-            . "📊 *CEK KEUANGAN*\n"
-            . "• *dompet* — Lihat semua saldo\n"
-            . "• *saldo bca* — Cek saldo BCA\n"
-            . "• *ringkasan hari ini* — Rekap harian\n"
-            . "• *ringkasan bulan ini* — Rekap bulanan\n"
-            . "• *5 transaksi terakhir* — Riwayat terbaru\n\n"
-
-            . "💡 *CARA KONFIRMASI*\n"
-            . "Setelah mengirim transaksi, Ledger akan menampilkan ringkasan.\n\n"
-            . "*1* — Simpan transaksi\n"
-            . "*3* — Batalkan transaksi\n\n"
-
-            . "Gunakan nama dompet yang sudah terdaftar di Ledger.\n\n"
-            . "_Ketik *bantuan* kapan saja untuk membuka panduan ini._";
-    }
-
-    /**
-     * Convert draft into validated transaction payload.
-     */
     private function payload(array $draft): array
     {
         return [
             'type' => $draft['type'] ?? null,
-
-            'account_id' => $draft['account_id']
-                ?? null,
-
-            'to_account_id' => (
-                ($draft['type'] ?? null) === 'transfer'
-            )
-                ? ($draft['related_account_id'] ?? null)
-                : null,
-
-            'category_id' => $draft['category_id']
-                ?? null,
-
-            'amount' => $draft['amount']
-                ?? null,
-
-            'date' => $draft['date']
-                ?? now()->toDateString(),
-
-            'note' => $draft['note']
-                ?? null,
+            'account_id' => $draft['account_id'] ?? null,
+            'to_account_id' => ($draft['type'] ?? null) === 'transfer' ? ($draft['related_account_id'] ?? null) : null,
+            'category_id' => $draft['category_id'] ?? null,
+            'amount' => $draft['amount'] ?? null,
+            'date' => $draft['date'] ?? now()->toDateString(),
+            'note' => $draft['note'] ?? null,
         ];
     }
 
-    /**
-     * Reset conversation state.
-     */
-    private function clear(
-        ConversationSession $session
-    ): void {
-        $session->update([
-            'state' => 'idle',
-            'context' => null,
-            'expires_at' => null,
-        ]);
+    private function clear(ConversationSession $session): void
+    {
+        $session->update(['state' => 'idle', 'context' => null, 'expires_at' => null]);
     }
 
-    /**
-     * Merge missing information from Groq.
-     */
-    private function mergeAi(
-        User $user,
-        array $draft,
-        string $text
-    ): array {
-        $ai = $this->groq->parse(
-            $user,
-            $text
-        );
-
+    private function mergeAi(User $user, array $draft, string $text): array
+    {
+        $ai = $this->groq->parse($user, $text);
         if (! $ai) {
             return $draft;
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Amount
-        |--------------------------------------------------------------------------
-        */
-
         if (! $draft['amount']) {
-            $draft['amount'] = $ai['amount']
-                ?? null;
+            $draft['amount'] = $ai['amount'] ?? null;
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Wallet
-        |--------------------------------------------------------------------------
-        */
-
-        if (
-            ! $draft['account_id']
-            && ! empty($ai['account_name'])
-        ) {
-            $account = $user->accounts()
-                ->where('is_archived', false)
-                ->whereRaw(
-                    'LOWER(name) = ?',
-                    [Str::lower($ai['account_name'])]
-                )
-                ->first();
-
+        if (! $draft['account_id'] && ! empty($ai['account_name'])) {
+            $account = $user->accounts()->where('is_archived', false)->whereRaw('LOWER(name) = ?', [Str::lower($ai['account_name'])])->first();
             $draft['account_id'] = $account?->id;
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Category
-        |--------------------------------------------------------------------------
-        */
-
-        if (
-            ! $draft['category_id']
-            && ! empty($ai['category_name'])
-        ) {
-            $category = $user->categories()
-                ->where('type', $draft['type'])
-                ->whereRaw(
-                    'LOWER(name) = ?',
-                    [Str::lower($ai['category_name'])]
-                )
-                ->first();
-
+        // Do not let fallback change an already classified transaction's type or direction.
+        if (! $draft['category_id'] && ! empty($ai['category_name'])) {
+            $category = $user->categories()->where('type', $draft['type'])->whereRaw('LOWER(name) = ?', [Str::lower($ai['category_name'])])->first();
             $draft['category_id'] = $category?->id;
             $draft['category_name'] = $category?->name;
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Preserve Local Transaction Classification
-        |--------------------------------------------------------------------------
-        |
-        | Groq must not change:
-        | - Transaction type
-        | - Transfer direction
-        | - Explicit source wallet
-        | - Explicit target wallet
-        |
-        */
-
         $draft['source'] = 'rule+groq';
 
         return $draft;
-    }
-
-    /**
-     * Format Indonesian Rupiah.
-     */
-    private function rupiah(
-        float|int|string $amount
-    ): string {
-        $value = (float) $amount;
-
-        $decimals = fmod($value, 1.0) === 0.0
-            ? 0
-            : 2;
-
-        return 'Rp' . number_format(
-            $value,
-            $decimals,
-            ',',
-            '.'
-        );
-    }
-
-    /**
-     * Format dates in Indonesian.
-     */
-    private function formatDate(
-        ?string $date
-    ): string {
-        try {
-            return Carbon::parse(
-                $date ?? now()->toDateString()
-            )
-                ->locale('id')
-                ->translatedFormat('d F Y');
-        } catch (\Throwable) {
-            return (string) $date;
-        }
     }
 }
