@@ -6,6 +6,8 @@ use App\Models\User;
 use App\Models\WhatsAppConnection;
 use App\Models\WhatsAppVerificationCode;
 use App\Services\WhatsApp\EvolutionProvider;
+use App\Services\WhatsApp\WhatsAppMessageFormat;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -43,7 +45,6 @@ class WhatsAppVerificationController extends Controller
         $user = $request->user();
 
         $existing = WhatsAppConnection::where('phone_number', $phone)
-            ->where('status', 'connected')
             ->where('user_id', '!=', $user->id)
             ->exists();
 
@@ -101,10 +102,9 @@ class WhatsAppVerificationController extends Controller
             'expires_at' => now()->addMinutes(10),
         ]);
 
-        $message = "Kode verifikasi Ledger Anda:\n\n"
-            ."{$code}\n\n"
-            ."Berlaku selama 10 menit.\n"
-            .'Jangan berikan kode ini kepada siapa pun.';
+        $message = WhatsAppMessageFormat::message('Kode verifikasi',
+            '*'.$code.'*', 'Berlaku selama 10 menit. Masukkan kode ini di aplikasi Ledger.',
+            'Jangan bagikan kode ini kepada siapa pun. Jika Anda tidak meminta kode, abaikan pesan ini.');
 
         try {
             $sent = $provider->sendText($phone, $message);
@@ -123,7 +123,7 @@ class WhatsAppVerificationController extends Controller
         }
 
         WhatsAppVerificationCode::where('user_id', $user->id)
-            ->where('id', '!=', $otp->id)
+            ->where('id', '<', $otp->id)
             ->whereNull('used_at')
             ->update(['used_at' => now()]);
 
@@ -145,61 +145,66 @@ class WhatsAppVerificationController extends Controller
 
         $user = $request->user();
 
-        $result = DB::transaction(function () use ($user, $data) {
-            User::whereKey($user->id)->lockForUpdate()->firstOrFail();
-            $otp = WhatsAppVerificationCode::where('user_id', $user->id)
-                ->whereNull('used_at')
-                ->latest('id')
-                ->lockForUpdate()
-                ->first();
+        try {
+            $result = DB::transaction(function () use ($user, $data) {
+                User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+                $otp = WhatsAppVerificationCode::where('user_id', $user->id)
+                    ->whereNull('used_at')
+                    ->latest('id')
+                    ->lockForUpdate()
+                    ->first();
 
-            if (! $otp || $otp->expires_at->isPast()) {
-                return ['error' => 'Kode tidak ditemukan atau sudah kedaluwarsa.'];
-            }
+                if (! $otp || $otp->expires_at->lessThanOrEqualTo(now())) {
+                    return ['error' => 'Kode tidak ditemukan atau sudah kedaluwarsa.'];
+                }
 
-            if ($otp->attempts >= 5) {
-                return ['error' => 'Batas percobaan OTP telah tercapai.'];
-            }
+                if ($otp->attempts >= 5) {
+                    return ['error' => 'Batas percobaan OTP telah tercapai.'];
+                }
 
-            $otp->increment('attempts');
+                $otp->increment('attempts');
 
-            if (! Hash::check($data['code'], $otp->code_hash)) {
-                return ['error' => 'Kode verifikasi salah.'];
-            }
+                if (! Hash::check($data['code'], $otp->code_hash)) {
+                    return ['error' => 'Kode verifikasi salah.'];
+                }
 
-            $taken = WhatsAppConnection::where(
-                'phone_number',
-                $otp->phone_number
-            )
-                ->where('user_id', '!=', $user->id)
-                ->exists();
+                $taken = WhatsAppConnection::where(
+                    'phone_number',
+                    $otp->phone_number
+                )
+                    ->where('user_id', '!=', $user->id)
+                    ->exists();
 
-            if ($taken) {
-                return ['error' => 'Nomor ini sudah digunakan akun lain.'];
-            }
+                if ($taken) {
+                    return ['error' => 'Nomor ini sudah digunakan akun lain.'];
+                }
 
-            $connection = WhatsAppConnection::where('user_id', $user->id)
-                ->lockForUpdate()
-                ->first();
+                $connection = WhatsAppConnection::where('user_id', $user->id)
+                    ->lockForUpdate()
+                    ->first();
 
-            if ($connection && $connection->status === 'connected') {
-                return ['error' => 'Akun sudah memiliki WhatsApp terhubung.'];
-            }
+                if ($connection && $connection->status === 'connected') {
+                    return ['error' => 'Akun sudah memiliki WhatsApp terhubung.'];
+                }
 
-            WhatsAppConnection::updateOrCreate(
-                ['user_id' => $user->id],
-                [
-                    'phone_number' => $otp->phone_number,
-                    'provider' => 'evolution',
-                    'status' => 'connected',
-                    'verified_at' => now(),
-                ]
-            );
+                WhatsAppConnection::updateOrCreate(
+                    ['user_id' => $user->id],
+                    [
+                        'phone_number' => $otp->phone_number,
+                        'provider' => 'evolution',
+                        'status' => 'connected',
+                        'verified_at' => now(),
+                    ]
+                );
 
-            $otp->update(['used_at' => now()]);
+                $otp->update(['used_at' => now()]);
 
-            return ['success' => true, 'phone' => $otp->phone_number];
-        });
+                return ['success' => true, 'phone' => $otp->phone_number];
+            });
+
+        } catch (UniqueConstraintViolationException $exception) {
+            throw ValidationException::withMessages(['code' => 'Nomor ini baru saja dihubungkan ke akun lain. Gunakan nomor lain atau periksa koneksi Anda.']);
+        }
 
         if (isset($result['error'])) {
             throw ValidationException::withMessages([
@@ -209,13 +214,7 @@ class WhatsAppVerificationController extends Controller
 
         // Kirim setelah transaksi database commit; kegagalan pesan tidak membatalkan verifikasi.
         try {
-            $provider->sendText($result['phone'], "🎉 WhatsApp berhasil terhubung ke Ledger!\n\n"
-                ."Contoh transaksi:\n"
-                ."• bensin 50rb bca\n"
-                ."• makan 35k gopay\n"
-                ."• gaji 8jt masuk bca\n\n"
-                ."Ketik bantuan untuk melihat panduan.\n"
-                .'Gunakan nama dompet yang sudah dibuat di Ledger.');
+            $provider->sendText($result['phone'], WhatsAppMessageFormat::welcome());
         } catch (\Throwable $e) {
             report($e);
         }

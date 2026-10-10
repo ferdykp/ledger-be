@@ -40,6 +40,10 @@ return [
         'model' => env('GROQ_MODEL', 'openai/gpt-oss-20b'),
     ],
 
+    'whatsapp' => [
+        'timezone' => env('WHATSAPP_TIMEZONE', 'Asia/Jakarta'),
+    ],
+
     'evolution' => [
         'url' => env('EVOLUTION_API_URL'),
         'key' => env('EVOLUTION_API_KEY'),

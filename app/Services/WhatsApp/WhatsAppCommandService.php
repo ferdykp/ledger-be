@@ -10,152 +10,73 @@ class WhatsAppCommandService
     public function respond(User $user, string $input): ?string
     {
         $command = Str::lower(trim(preg_replace('/\s+/u', ' ', $input)));
-
-        if (in_array($command, [
-            'bantuan',
-            'help',
-            'panduan',
-            'halo ledger',
-            'menu',
-            'commands',
-        ], true)) {
+        if (in_array($command, ['bantuan', 'help', 'panduan', 'halo ledger', 'menu', 'commands'], true)) {
             return $this->help();
         }
-
+        $accounts = fn () => $user->accounts()->where('is_archived', false)->orderBy('name');
         if ($command === 'dompet') {
-            $accounts = $user->accounts()
-                ->where('is_archived', false)
-                ->orderBy('name')
-                ->get(['name', 'balance']);
-
-            if ($accounts->isEmpty()) {
-                return "🏦 *DOMPET LEDGER*\n\n"
-                    . "Belum ada dompet aktif.\n"
-                    . "Tambahkan dompet melalui aplikasi Ledger.";
+            $query = $accounts();
+            $count = (clone $query)->count();
+            if (! $count) {
+                return WhatsAppMessageFormat::message('Dompet Anda', 'Belum ada dompet aktif.', 'Tambahkan dompet melalui menu *Akun & Dompet* di aplikasi Ledger.');
             }
+            $total = (clone $query)->sum('balance');
+            $lines = $query->limit(20)->get()->map(fn ($account) => '• '.WhatsAppMessageFormat::text($account->name)."\n  *".WhatsAppMessageFormat::money($account->balance).'*')->implode("\n\n");
 
-            $lines = $accounts->map(
-                fn($account) => "• *{$account->name}*\n"
-                    . "  " . $this->money($account->balance)
-            )->implode("\n\n");
-
-            return "🏦 *DAFTAR DOMPET*\n\n"
-                . $lines
-                . "\n\n━━━━━━━━━━━━━━━━\n"
-                . "*Total Saldo*\n"
-                . $this->money($accounts->sum('balance'))
-                . "\n\n_Ketik saldo [nama dompet] untuk detail._";
+            return WhatsAppMessageFormat::message('Dompet Anda', $lines,
+                '*Total saldo aktif: '.WhatsAppMessageFormat::money($total).'*',
+                $count > 20 ? 'Menampilkan 20 dari '.$count.' dompet. Lihat seluruh daftar di aplikasi Ledger.' : '',
+                'Ketik *saldo [nama dompet]* untuk melihat saldo satu dompet.');
         }
-
         if (preg_match('/^saldo(?:\s+(.+))?$/u', $command, $matches)) {
             $name = trim($matches[1] ?? '');
-
             if ($name === '') {
-                return "💰 *CEK SALDO*\n\n"
-                    . "Masukkan nama dompet.\n\n"
-                    . "Contoh: *saldo bca*\n"
-                    . "Ketik *dompet* untuk melihat daftar.";
+                return WhatsAppMessageFormat::message('Cek saldo', 'Sertakan nama dompet yang ingin dilihat.', "Contoh: *saldo bca*\nKetik *dompet* untuk melihat nama dompet Anda.");
             }
-
-            $account = $user->accounts()
-                ->where('is_archived', false)
-                ->get(['name', 'balance'])
-                ->first(
-                    fn($item) =>
-                    Str::lower(trim($item->name)) === $name
-                );
-
+            $account = $accounts()->get(['name', 'balance'])->first(fn ($item) => Str::lower(trim(preg_replace('/\s+/u', ' ', $item->name))) === $name);
             if (! $account) {
-                return "⚠️ *DOMPET TIDAK DITEMUKAN*\n\n"
-                    . "Dompet *{$name}* tidak tersedia.\n"
-                    . "Ketik *dompet* untuk melihat daftar dompet aktif.";
+                return WhatsAppMessageFormat::message('Dompet tidak ditemukan', 'Nama “'.WhatsAppMessageFormat::text($name).'” tidak cocok dengan dompet aktif Anda.', 'Ketik *dompet*, lalu gunakan nama yang tertera.');
             }
 
-            return "💰 *SALDO DOMPET*\n\n"
-                . "Dompet: *{$account->name}*\n"
-                . "Saldo tersedia:\n"
-                . "*" . $this->money($account->balance) . "*";
+            return WhatsAppMessageFormat::message('Saldo '.WhatsAppMessageFormat::text($account->name), '*'.WhatsAppMessageFormat::money($account->balance).'*', 'Saldo berdasarkan transaksi yang tercatat di Ledger.');
         }
+        if (preg_match('/^ringkasan\s+(hari ini|bulan ini)$/u', $command, $matches)) {
+            $today = WhatsAppMessageFormat::today();
+            $daily = $matches[1] === 'hari ini';
+            $start = $daily ? $today : $today->startOfMonth();
+            $end = $daily ? $today : $today->endOfMonth();
+            $totals = $user->transactions()->whereIn('type', ['income', 'expense'])
+                ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
+                ->selectRaw('type, SUM(amount) as total, COUNT(*) as count')->groupBy('type')->get()->keyBy('type');
+            $income = (float) ($totals->get('income')?->total ?? 0);
+            $expense = (float) ($totals->get('expense')?->total ?? 0);
+            $count = $totals->sum('count');
 
-        if (preg_match(
-            '/^ringkasan\s+(hari ini|bulan ini)$/u',
-            $command,
-            $matches
-        )) {
-            $period = $matches[1];
-
-            $query = $user->transactions()
-                ->whereIn('type', ['income', 'expense']);
-
-            if ($period === 'hari ini') {
-                $query->whereDate('date', now()->toDateString());
-                $title = 'HARI INI';
-            } else {
-                $query->whereDate(
-                    'date',
-                    '>=',
-                    now()->startOfMonth()->toDateString()
-                )->whereDate(
-                    'date',
-                    '<=',
-                    now()->endOfMonth()->toDateString()
-                );
-
-                $title = 'BULAN INI';
-            }
-
-            $totals = $query
-                ->selectRaw('type, SUM(amount) as total')
-                ->groupBy('type')
-                ->pluck('total', 'type');
-
-            $income = (float) ($totals['income'] ?? 0);
-            $expense = (float) ($totals['expense'] ?? 0);
-
-            return "📊 *RINGKASAN {$title}*\n\n"
-                . "📈 *Pemasukan*\n"
-                . $this->money($income)
-                . "\n\n📉 *Pengeluaran*\n"
-                . $this->money($expense)
-                . "\n\n━━━━━━━━━━━━━━━━\n"
-                . "*Selisih*\n"
-                . $this->money($income - $expense)
-                . "\n\n_Transfer antar-dompet tidak dihitung._";
+            return WhatsAppMessageFormat::message('Ringkasan '.$matches[1],
+                $daily ? WhatsAppMessageFormat::date($today->toDateString()) : $today->locale('id')->translatedFormat('F Y'),
+                'Pemasukan: *'.WhatsAppMessageFormat::money($income)."*\nPengeluaran: *".WhatsAppMessageFormat::money($expense)."*\nSelisih: *".WhatsAppMessageFormat::money($income - $expense).'*',
+                $count ? $count.' transaksi tercatat.' : 'Belum ada transaksi pada periode ini.',
+                '_Transfer antar-dompet tidak dihitung. Selisih periode bukan saldo dompet._');
         }
-
         if ($command === '5 transaksi terakhir') {
-            $transactions = $user->transactions()
-                ->with('account:id,name')
-                ->orderByDesc('date')
-                ->orderByDesc('id')
-                ->limit(5)
-                ->get();
-
+            $transactions = $user->transactions()->with(['account:id,name', 'relatedAccount:id,name'])->orderByDesc('date')->orderByDesc('id')->limit(5)->get();
             if ($transactions->isEmpty()) {
-                return "🧾 *RIWAYAT TRANSAKSI*\n\n"
-                    . "Belum ada transaksi yang tercatat.";
+                return WhatsAppMessageFormat::message('Transaksi terakhir', 'Belum ada transaksi yang tercatat.', 'Ketik *bantuan* untuk mulai mencatat.');
             }
-
-            $lines = $transactions->map(function ($tx) {
-                $label = match ($tx->type) {
-                    'income' => '📈 Pemasukan',
-                    'expense' => '📉 Pengeluaran',
-                    'transfer' => '🔄 Transfer',
-                    default => ucfirst($tx->type),
+            $lines = $transactions->map(function ($tx, $index) {
+                $type = match ($tx->type) {
+                    'income' => 'Pemasukan', 'transfer' => 'Transfer', default => 'Pengeluaran'
                 };
+                $wallet = WhatsAppMessageFormat::text($tx->account?->name ?? 'Dompet tidak tersedia');
+                if ($tx->type === 'transfer') {
+                    $wallet .= ' → '.WhatsAppMessageFormat::text($tx->relatedAccount?->name ?? 'Dompet tidak tersedia');
+                }
 
-                return "*{$label}*\n"
-                    . $this->money($tx->amount)
-                    . "\n"
-                    . $tx->date->format('d/m/Y')
-                    . ' • '
-                    . ($tx->account?->name ?? 'Dompet tidak tersedia');
+                return ($index + 1).'. *'.$type.' · '.WhatsAppMessageFormat::money($tx->amount)."*\n".WhatsAppMessageFormat::date($tx->date->toDateString()).' · '.$wallet
+                    .($tx->note ? "\n".WhatsAppMessageFormat::text($tx->note, 100) : '');
             })->implode("\n\n");
 
-            return "🧾 *5 TRANSAKSI TERAKHIR*\n\n"
-                . $lines
-                . "\n\n━━━━━━━━━━━━━━━━\n"
-                . "_Lihat detail lengkap melalui aplikasi Ledger._";
+            return WhatsAppMessageFormat::message('Transaksi terakhir', $lines, 'Lihat atau ubah detail melalui menu *Transaksi* di aplikasi Ledger.');
         }
 
         return null;
@@ -163,71 +84,10 @@ class WhatsAppCommandService
 
     public function help(): string
     {
-        return <<<'TEXT'
-        📒 *LEDGER — PANDUAN WHATSAPP*
-
-        Catat transaksi dan pantau keuangan langsung dari WhatsApp.
-
-        ━━━━━━━━━━━━━━━━
-
-        💸 *1. PENGELUARAN*
-
-        • bensin 50rb bca
-        • makan 35rb gopay
-        • bayar listrik 250rb bca
-
-        💰 *2. PEMASUKAN*
-
-        • uang sate 141rb masuk ke bca
-        • gaji 5jt masuk bca
-        • pemasukan 500rb bca
-        • terima transfer 200rb dari teman ke bca
-
-        🔄 *3. TRANSFER ANTAR-DOMPET*
-
-        • transfer 100rb bca ke gopay
-        • pindah saldo 200rb dari bca ke dana
-
-        ━━━━━━━━━━━━━━━━
-
-        🏦 *4. INFORMASI DOMPET*
-
-        • dompet
-        • saldo bca
-        • saldo gopay
-
-        📊 *5. LAPORAN*
-
-        • ringkasan hari ini
-        • ringkasan bulan ini
-        • 5 transaksi terakhir
-
-        ━━━━━━━━━━━━━━━━
-
-        ✅ *6. KONFIRMASI*
-
-        Setelah transaksi dikirim, periksa ringkasannya.
-
-        *1* — Simpan transaksi
-        *3* — Batalkan transaksi
-
-        Konfirmasi berlaku selama 30 menit.
-
-        ━━━━━━━━━━━━━━━━
-
-        💡 *TIPS*
-
-        • Gunakan nama dompet yang ada di Ledger.
-        • Nominal: 50rb, 50k, 50000, atau 5jt.
-        • Uang diterima dari orang lain = pemasukan.
-        • Pindah uang antar-dompet sendiri = transfer.
-
-        Ketik *bantuan* untuk membuka panduan ini.
-        TEXT;
-    }
-
-    private function money(float|int|string|null $amount): string
-    {
-        return 'Rp' . number_format((float) $amount, 0, ',', '.');
+        return WhatsAppMessageFormat::message('Panduan WhatsApp', 'Catat transaksi, cek saldo, dan lihat ringkasan keuangan lewat chat.',
+            "*Catat transaksi*\n• Pengeluaran: makan 35rb gopay\n• Pemasukan: gaji 5jt masuk bca\n• Transfer: transfer 100rb bca ke gopay",
+            "*Pantau keuangan*\n• dompet\n• saldo bca\n• ringkasan hari ini\n• ringkasan bulan ini\n• 5 transaksi terakhir",
+            "*Periksa sebelum menyimpan*\nSetiap transaksi ditampilkan sebagai draf. Balas *1* untuk menyimpan atau *3* untuk membatalkan. Draf berlaku 30 menit.",
+            'Gunakan nama dompet Anda di Ledger. Nominal dapat ditulis *50rb*, *50k*, *50000*, atau *1,5jt*.');
     }
 }

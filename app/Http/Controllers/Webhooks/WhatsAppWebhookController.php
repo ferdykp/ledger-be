@@ -143,7 +143,7 @@ class WhatsAppWebhookController extends Controller
         $sendingStarted = microtime(true);
 
         $sent = Cache::lock(
-            'whatsapp:reply:' . $message->id,
+            'whatsapp:reply:'.$message->id,
             30
         )->get(function () use ($message, $provider) {
             $message = $message->fresh();

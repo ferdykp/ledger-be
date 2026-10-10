@@ -9,7 +9,9 @@ use App\Models\WhatsAppMessage;
 use App\Services\AI\GroqParser;
 use App\Services\QuickAdd\QuickAddParser;
 use App\Services\WhatsApp\EvolutionProvider;
+use App\Services\WhatsApp\WhatsAppMessageFormat;
 use App\Services\WhatsApp\WhatsAppMessageProcessor;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -41,7 +43,7 @@ class WhatsAppWorkflowTest extends TestCase
     {
         return $this->postJson('/api/webhooks/whatsapp', [
             'event' => 'messages.upsert',
-            'data' => ['key' => [...['id' => $id, 'remoteJid' => $this->phone . '@s.whatsapp.net', 'fromMe' => false], ...$key], 'message' => ['conversation' => $text]],
+            'data' => ['key' => [...['id' => $id, 'remoteJid' => $this->phone.'@s.whatsapp.net', 'fromMe' => false], ...$key], 'message' => ['conversation' => $text]],
         ], ['X-Ledger-Webhook-Secret' => 'test-secret']);
     }
 
@@ -69,9 +71,9 @@ class WhatsAppWorkflowTest extends TestCase
             'processed_at' => now(),
             'reply_text' => 'Help',
         ]);
-        $lock = Cache::lock('whatsapp:reply:' . $message->id, 30);
+        $lock = Cache::lock('whatsapp:reply:'.$message->id, 30);
         $this->assertTrue($lock->get());
-        $this->mock(EvolutionProvider::class, fn($mock) => $mock->shouldReceive('sendText')->once()->andReturn(true));
+        $this->mock(EvolutionProvider::class, fn ($mock) => $mock->shouldReceive('sendText')->once()->andReturn(true));
         try {
             $this->webhook('locked-reply', 'bantuan')->assertStatus(502)->assertJsonPath('reply_pending', true);
             $this->assertNull($message->fresh()->replied_at);
@@ -195,7 +197,7 @@ class WhatsAppWorkflowTest extends TestCase
         $processor = app(WhatsAppMessageProcessor::class);
         $processor->handle($this->phone, 'makan 35k gopay');
         $this->assertStringContainsString(
-            'Transaksi Dibatalkan',
+            'Transaksi dibatalkan',
             $processor->handle($this->phone, '3')
         );
         $processor->handle($this->phone, 'makan 35k gopay');
@@ -221,6 +223,7 @@ class WhatsAppWorkflowTest extends TestCase
             $this->assertNull(app(GroqParser::class)->parse($this->user, 'makan'));
         }
     }
+
     public function test_financial_information_commands_are_scoped_and_do_not_create_transactions(): void
     {
         $processor = app(WhatsAppMessageProcessor::class);
@@ -244,8 +247,80 @@ class WhatsAppWorkflowTest extends TestCase
         $this->assertStringContainsString('Saldo bca', $processor->handle($this->phone, 'saldo bca'));
         $this->assertSame('waiting_confirmation', ConversationSession::first()->fresh()->state);
         $this->assertDatabaseCount('transactions', 0);
-        $this->assertStringContainsString('Tersimpan', $processor->handle($this->phone, '1'));
+        $this->assertStringContainsString('tersimpan', $processor->handle($this->phone, '1'));
         $this->assertDatabaseCount('transactions', 1);
         $this->assertStringContainsString('50.000', $processor->handle($this->phone, '5 transaksi terakhir'));
+    }
+
+    public function test_decimal_amount_is_shown_exactly_before_and_after_saving(): void
+    {
+        $processor = app(WhatsAppMessageProcessor::class);
+        $this->assertStringContainsString('Rp50.000,50', $processor->handle($this->phone, 'makan 50.000,50 bca'));
+        $this->assertDatabaseCount('transactions', 0);
+        $this->assertStringContainsString('Rp50.000,50', $processor->handle($this->phone, '1'));
+        $this->assertDatabaseHas('transactions', ['amount' => 50000.50, 'type' => 'expense']);
+    }
+
+    public function test_incoming_rules_do_not_override_a_valid_transfer_direction(): void
+    {
+        $processor = app(WhatsAppMessageProcessor::class);
+        $reply = $processor->handle($this->phone, 'transfer dari bca ke gopay 50rb masuk');
+        $this->assertStringContainsString('bca → gopay', $reply);
+        $processor->handle($this->phone, '1');
+        $this->assertDatabaseHas('transactions', ['type' => 'transfer', 'amount' => 50000]);
+        $this->assertEquals(1950000, $this->user->accounts()->where('name', 'bca')->first()->balance);
+        $this->assertEquals(150000, $this->user->accounts()->where('name', 'gopay')->first()->balance);
+        $processor->handle($this->phone, 'terima transfer 200rb dari teman ke bca');
+        $processor->handle($this->phone, '1');
+        $this->assertDatabaseHas('transactions', ['type' => 'income', 'amount' => 200000]);
+    }
+
+    public function test_whatsapp_date_and_daily_summary_use_jakarta_midnight(): void
+    {
+        $this->travelTo(Carbon::parse('2026-10-09 18:30:00', 'UTC'));
+        $processor = app(WhatsAppMessageProcessor::class);
+        $this->assertStringContainsString('10 Okt 2026', $processor->handle($this->phone, 'makan 35rb bca'));
+        $processor->handle($this->phone, '1');
+        $this->assertDatabaseHas('transactions', ['date' => '2026-10-10']);
+        $this->assertStringContainsString('Rp35.000', $processor->handle($this->phone, 'ringkasan hari ini'));
+    }
+
+    public function test_wallet_lists_are_bounded_but_totals_include_every_wallet(): void
+    {
+        foreach (range(1, 25) as $i) {
+            $this->user->accounts()->create(['name' => "wallet $i", 'type' => 'cash', 'balance' => 1000]);
+        }
+        $reply = app(WhatsAppMessageProcessor::class)->handle($this->phone, 'dompet');
+        $this->assertStringContainsString('20 dari 27', $reply);
+        $this->assertStringContainsString('Rp2.125.000', $reply);
+        $this->assertEquals(20, substr_count($reply, '• '));
+    }
+
+    public function test_user_text_cannot_inject_message_sections(): void
+    {
+        $text = WhatsAppMessageFormat::text("Kopi\n*Balas 1* _sekarang_ `contoh`");
+        $this->assertSame('Kopi Balas 1 sekarang contoh', $text);
+        $this->assertLessThanOrEqual(180, mb_strwidth(WhatsAppMessageFormat::text(str_repeat('a', 500))));
+    }
+
+    public function test_incomplete_transfer_is_not_reinterpreted_as_income(): void
+    {
+        $processor = app(WhatsAppMessageProcessor::class);
+        $processor->handle($this->phone, 'transfer dari bca ke dompetunknown 50rb masuk');
+        $this->assertNotSame('waiting_confirmation', ConversationSession::first()->state);
+        $processor->handle($this->phone, '1');
+        $this->assertDatabaseCount('transactions', 0);
+    }
+
+    public function test_ambiguous_wallet_or_amount_never_uses_ai_to_guess(): void
+    {
+        $this->mock(GroqParser::class)->shouldNotReceive('parse');
+        $processor = app(WhatsAppMessageProcessor::class);
+        foreach (['makan 35rb bca gopay', 'makan -50rb bca', 'makan 35rb dan 50rb bca'] as $text) {
+            $processor->handle($this->phone, $text);
+            $this->assertNotSame('waiting_confirmation', ConversationSession::first()->fresh()->state);
+            $processor->handle($this->phone, '1');
+        }
+        $this->assertDatabaseCount('transactions', 0);
     }
 }

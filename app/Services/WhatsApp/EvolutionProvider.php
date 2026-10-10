@@ -13,7 +13,7 @@ class EvolutionProvider
         $instance = (string) config('services.evolution.instance');
         $key = (string) config('services.evolution.key');
 
-        if (!$base || !$instance || !$key) {
+        if (! $base || ! $instance || ! $key) {
             Log::error('Evolution API configuration incomplete', [
                 'has_url' => $base !== '',
                 'has_instance' => $instance !== '',
@@ -30,14 +30,14 @@ class EvolutionProvider
                     'apikey' => $key,
                 ])
                 ->post(
-                    $base . '/message/sendText/' . rawurlencode($instance),
+                    $base.'/message/sendText/'.rawurlencode($instance),
                     [
                         'number' => $phone,
                         'text' => $text,
                     ]
                 );
 
-            if (!$response->successful()) {
+            if (! $response->successful()) {
                 Log::warning('Evolution API sendText failed', [
                     'instance' => $instance,
                     'phone_suffix' => substr($phone, -4),

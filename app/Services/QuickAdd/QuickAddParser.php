@@ -3,6 +3,7 @@
 namespace App\Services\QuickAdd;
 
 use App\Models\User;
+use App\Services\WhatsApp\WhatsAppMessageFormat;
 use Illuminate\Support\Str;
 
 class QuickAddParser
@@ -40,6 +41,10 @@ class QuickAddParser
                 $account = $related = null;
             }
         }
+        $ambiguousAccount = $type !== 'transfer' && $matched->count() > 1;
+        if ($ambiguousAccount) {
+            $account = null;
+        }
         $category = $this->category($user, $lower, $type);
         $missing = [];
         if (! $amount) {
@@ -53,7 +58,7 @@ class QuickAddParser
         }
         $confidence = 0.25 + ($amount ? 0.3 : 0) + ($account ? 0.25 : 0) + ($category ? 0.15 : 0) + ($type ? 0.05 : 0);
 
-        return ['type' => $type, 'amount' => $amount, 'account_id' => $account?->id, 'account_name' => $account?->name, 'related_account_id' => $related?->id, 'related_account_name' => $related?->name, 'category_id' => $category?->id, 'category_name' => $category?->name, 'note' => $this->note($raw), 'date' => now()->toDateString(), 'missing' => $missing, 'confidence' => round(min(1, $confidence), 2), 'source' => 'rule'];
+        return ['ambiguous_account' => $ambiguousAccount, 'type' => $type, 'amount' => $amount, 'account_id' => $account?->id, 'account_name' => $account?->name, 'related_account_id' => $related?->id, 'related_account_name' => $related?->name, 'category_id' => $category?->id, 'category_name' => $category?->name, 'note' => $this->note($raw), 'date' => WhatsAppMessageFormat::today()->toDateString(), 'missing' => $missing, 'confidence' => round(min(1, $confidence), 2), 'source' => 'rule'];
     }
 
     private function amount(string $text): ?float
