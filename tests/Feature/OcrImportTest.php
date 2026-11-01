@@ -46,7 +46,7 @@ class OcrImportTest extends TestCase
         $this->fakeTesseract('echo "Total bayar Rp 49.300,00\n22 Sep 2026\nMerchant: Toko Uji";');
         $this->postJson('/api/imports/scan', [
             'document' => UploadedFile::fake()->image('invoice.png', 1000, 4000),
-        ])->assertCreated()->assertJsonPath('data.draft.amount', 49300)
+        ])->assertCreated()->assertJsonPath('data.draft.amount', '49300.00')
             ->assertJsonPath('data.draft.date', '2026-09-22');
         $calls = file($this->trace, FILE_IGNORE_NEW_LINES);
         $this->assertCount(1, $calls);

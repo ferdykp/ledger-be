@@ -20,12 +20,17 @@ final class WhatsAppMessageFormat
         return mb_strimwidth(trim($value), 0, $limit, '…');
     }
 
-    public static function money(float|int|string|null $amount): string
+    public static function money(int|string|null $amount): string
     {
-        $number = round((float) $amount, 2);
-        $decimals = abs($number - round($number)) > 0.00001 ? 2 : 0;
+        $number = (string) ($amount ?? '0');
+        $negative = str_starts_with($number, '-');
+        $number = ltrim($number, '+-');
+        [$integer, $fraction] = array_pad(explode('.', $number, 2), 2, '');
+        $integer = ltrim($integer, '0') ?: '0';
+        $fraction = substr(str_pad($fraction, 2, '0'), 0, 2);
+        $formatted = preg_replace('/\B(?=(\d{3})+(?!\d))/', '.', $integer);
 
-        return ($number < 0 ? '−' : '').'Rp'.number_format(abs($number), $decimals, ',', '.');
+        return ($negative ? '−' : '').'Rp'.$formatted.(trim($fraction, '0') !== '' ? ','.$fraction : '');
     }
 
     public static function today(): CarbonImmutable

@@ -70,6 +70,6 @@ class AccountLifecycleTest extends TestCase
         $csv = $this->get('/api/transactions/export')->assertOk()->streamedContent();
         $this->assertEquals(106, count(array_filter(explode("\n", $csv))));
         $this->assertStringContainsString("'=SUM", $csv);
-        $this->getJson('/api/reports/monthly?month=2026-10')->assertOk()->assertJsonPath('data.income', 105);
+        $this->getJson('/api/reports/monthly?month=2026-10')->assertOk()->assertJsonPath('data.income', '105.00');
     }
 }

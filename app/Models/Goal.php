@@ -16,14 +16,16 @@ class Goal extends Model
         'name',
         'target_amount',
         'current_amount',
+        'opening_balance',
         'target_date',
         'icon',
     ];
 
     protected $casts = [
         'target_date' => 'date',
-        'target_amount' => 'float',
-        'current_amount' => 'float',
+        'target_amount' => 'decimal:2',
+        'current_amount' => 'decimal:2',
+        'opening_balance' => 'decimal:2',
     ];
 
     public function user(): BelongsTo
@@ -36,12 +38,27 @@ class Goal extends Model
         return $this->hasMany(GoalContribution::class);
     }
 
+    public function items(): HasMany
+    {
+        return $this->hasMany(GoalItem::class)->orderBy('sort_order')->orderBy('id');
+    }
+
+    public function cashAllocations(): HasMany
+    {
+        return $this->hasMany(GoalCashAllocation::class);
+    }
+
+    public function assetAllocations(): HasMany
+    {
+        return $this->hasMany(GoalAssetAllocation::class);
+    }
+
     public function getProgressPercentAttribute(): float
     {
-        if ($this->target_amount <= 0) {
+        if (bccomp((string) $this->target_amount, '0', 2) <= 0) {
             return 0.0;
         }
 
-        return min(100, round(($this->current_amount / $this->target_amount) * 100, 1));
+        return min(100, (float) bcdiv(bcmul((string) $this->current_amount, '1000', 0), (string) $this->target_amount, 0) / 10);
     }
 }

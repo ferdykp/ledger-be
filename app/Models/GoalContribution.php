@@ -14,11 +14,13 @@ class GoalContribution extends Model
         'goal_id',
         'amount',
         'date',
+        'note',
+        'idempotency_key',
     ];
 
     protected $casts = [
         'date' => 'date',
-        'amount' => 'float',
+        'amount' => 'decimal:2',
     ];
 
     public function goal(): BelongsTo

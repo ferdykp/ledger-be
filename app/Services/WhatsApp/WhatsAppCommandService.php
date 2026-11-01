@@ -3,6 +3,7 @@
 namespace App\Services\WhatsApp;
 
 use App\Models\User;
+use App\Support\DecimalMath;
 use Illuminate\Support\Str;
 
 class WhatsAppCommandService
@@ -45,16 +46,16 @@ class WhatsAppCommandService
             $daily = $matches[1] === 'hari ini';
             $start = $daily ? $today : $today->startOfMonth();
             $end = $daily ? $today : $today->endOfMonth();
-            $totals = $user->transactions()->whereIn('type', ['income', 'expense'])
+            $totals = $user->transactions()->whereNull('financial_purpose')->whereIn('type', ['income', 'expense'])
                 ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
                 ->selectRaw('type, SUM(amount) as total, COUNT(*) as count')->groupBy('type')->get()->keyBy('type');
-            $income = (float) ($totals->get('income')?->total ?? 0);
-            $expense = (float) ($totals->get('expense')?->total ?? 0);
+            $income = DecimalMath::add((string) ($totals->get('income')?->total ?? '0'), '0.00');
+            $expense = DecimalMath::add((string) ($totals->get('expense')?->total ?? '0'), '0.00');
             $count = $totals->sum('count');
 
             return WhatsAppMessageFormat::message('Ringkasan '.$matches[1],
                 $daily ? WhatsAppMessageFormat::date($today->toDateString()) : $today->locale('id')->translatedFormat('F Y'),
-                'Pemasukan: *'.WhatsAppMessageFormat::money($income)."*\nPengeluaran: *".WhatsAppMessageFormat::money($expense)."*\nSelisih: *".WhatsAppMessageFormat::money($income - $expense).'*',
+                'Pemasukan: *'.WhatsAppMessageFormat::money($income)."*\nPengeluaran: *".WhatsAppMessageFormat::money($expense)."*\nSelisih: *".WhatsAppMessageFormat::money(DecimalMath::subtract($income, $expense)).'*',
                 $count ? $count.' transaksi tercatat.' : 'Belum ada transaksi pada periode ini.',
                 '_Transfer antar-dompet tidak dihitung. Selisih periode bukan saldo dompet._');
         }

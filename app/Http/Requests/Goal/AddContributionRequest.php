@@ -16,6 +16,8 @@ class AddContributionRequest extends FormRequest
         return [
             'amount' => ['required', 'numeric', 'gt:0', 'decimal:0,2', 'max:9999999999999.99'],
             'date' => ['required', 'date'],
+            'note' => ['nullable', 'string', 'max:500'],
+            'idempotency_key' => ['nullable', 'string', 'max:80'],
         ];
     }
 }

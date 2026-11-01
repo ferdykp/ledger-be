@@ -6,6 +6,7 @@ use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Support\DecimalMath;
 
 class Budget extends Model
 {
@@ -21,7 +22,7 @@ class Budget extends Model
 
     protected $casts = [
         'start_date' => 'date',
-        'amount_limit' => 'float',
+        'amount_limit' => 'decimal:2',
     ];
 
     public function user(): BelongsTo
@@ -35,23 +36,24 @@ class Budget extends Model
     }
 
     // Hitung realisasi pengeluaran dalam rentang bulan budget
-    public function getSpentAmountAttribute(): float
+    public function getSpentAmountAttribute(): string
     {
         if (array_key_exists('spent_total', $this->attributes)) {
-            return (float) $this->attributes['spent_total'];
+            return DecimalMath::add((string) $this->attributes['spent_total'], '0.00');
         }
         if (! $this->category_id) {
-            return 0.0;
+            return '0.00';
         }
 
         $startDate = Carbon::parse($this->start_date)->startOfMonth();
         $endDate = $this->period === 'yearly' ? $startDate->copy()->addYear()->subDay() : $startDate->copy()->endOfMonth();
 
-        return (float) Transaction::where('user_id', $this->user_id)
+        return DecimalMath::add((string) Transaction::where('user_id', $this->user_id)
             ->where('category_id', $this->category_id)
             ->where('type', 'expense')
+            ->whereNull('financial_purpose')
             ->whereBetween('date', [$startDate->toDateString(), $endDate->toDateString()])
-            ->sum('amount');
+            ->sum('amount'), '0.00');
     }
 
     // Persentase penggunaan (0% - >100%)

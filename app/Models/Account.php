@@ -22,7 +22,7 @@ class Account extends Model
     ];
 
     protected $casts = [
-        'balance' => 'float',
+        'balance' => 'decimal:2',
         'is_archived' => 'boolean',
     ];
 
@@ -34,5 +34,10 @@ class Account extends Model
     public function transactions(): HasMany
     {
         return $this->hasMany(Transaction::class);
+    }
+
+    public function cashAllocations(): HasMany
+    {
+        return $this->hasMany(GoalCashAllocation::class);
     }
 }

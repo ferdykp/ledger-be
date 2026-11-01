@@ -37,7 +37,7 @@ class BudgetController extends Controller
             $first = $group->first();
             $start = $first->start_date->copy()->startOfMonth();
             $end = $first->period === 'yearly' ? $start->copy()->addYear()->subDay() : $start->copy()->endOfMonth();
-            $spent = Transaction::where('user_id', $request->user()->id)->where('type', 'expense')
+            $spent = Transaction::where('user_id', $request->user()->id)->whereNull('financial_purpose')->where('type', 'expense')
                 ->whereIn('category_id', $group->pluck('category_id'))
                 ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
                 ->groupBy('category_id')->selectRaw('category_id, SUM(amount) as total')->pluck('total', 'category_id');

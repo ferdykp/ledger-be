@@ -20,11 +20,15 @@ class Transaction extends Model
         'note',
         'date',
         'attachment_url',
+        'financial_purpose',
+        'goal_obligation_id',
+        'goal_allocation_amount',
+        'idempotency_key',
     ];
 
     protected $casts = [
         'date' => 'date:Y-m-d',
-        'amount' => 'float',
+        'amount' => 'decimal:2',
     ];
 
     public function user(): BelongsTo
@@ -45,5 +49,10 @@ class Transaction extends Model
     public function category(): BelongsTo
     {
         return $this->belongsTo(Category::class);
+    }
+
+    public function goalObligation(): BelongsTo
+    {
+        return $this->belongsTo(GoalObligation::class);
     }
 }

@@ -58,6 +58,7 @@ class TransactionController extends Controller
     public function show(Request $request, Transaction $transaction): TransactionResource
     {
         abort_unless($transaction->user_id === $request->user()->id, 403);
+        abort_if($transaction->financial_purpose, 404);
 
         return new TransactionResource($transaction->load(['account', 'relatedAccount', 'category']));
     }

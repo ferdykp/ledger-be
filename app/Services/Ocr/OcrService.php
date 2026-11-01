@@ -3,6 +3,7 @@
 namespace App\Services\Ocr;
 
 use Carbon\Carbon;
+use App\Support\DecimalMath;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
 
@@ -182,7 +183,7 @@ class OcrService
         ];
     }
 
-    private function parseAmount(array $lines): ?float
+    private function parseAmount(array $lines): ?string
     {
         /*
          * PRIORITAS LABEL.
@@ -240,8 +241,8 @@ class OcrService
 
                 if (
                     $amount !== null &&
-                    $amount > 0 &&
-                    $amount < 1_000_000_000
+                    DecimalMath::compare($amount, '0.00') > 0 &&
+                    DecimalMath::compare($amount, '1000000000.00') < 0
                 ) {
                     $candidates[] = $amount;
                 }
@@ -259,7 +260,7 @@ class OcrService
         return end($candidates);
     }
 
-    private function extractMoney(string $value): ?float
+    private function extractMoney(string $value): ?string
     {
         if (! preg_match(
             '/(?:IDR|RP)?\s*([0-9][0-9.,]*)/i',
@@ -280,7 +281,7 @@ class OcrService
                 $number
             )
         ) {
-            return (float) str_replace(',', '', $number);
+            return DecimalMath::add(str_replace(',', '', $number), '0.00');
         }
 
         /*
@@ -295,14 +296,14 @@ class OcrService
             $number = str_replace('.', '', $number);
             $number = str_replace(',', '.', $number);
 
-            return (float) $number;
+            return DecimalMath::add($number, '0.00');
         }
 
         /*
          * 49300 / 49300.00
          */
         if (preg_match('/^\d+(?:\.\d{1,2})?$/', $number)) {
-            return (float) $number;
+            return DecimalMath::add($number, '0.00');
         }
 
         return null;

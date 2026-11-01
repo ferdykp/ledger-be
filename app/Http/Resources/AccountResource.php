@@ -13,7 +13,7 @@ class AccountResource extends JsonResource
             'id' => $this->id,
             'name' => $this->name,
             'type' => $this->type,
-            'balance' => (float) $this->balance,
+            'balance' => (string) $this->balance,
             'color' => $this->color,
             'icon' => $this->icon,
             'is_archived' => (bool) $this->is_archived,

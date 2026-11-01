@@ -4,6 +4,7 @@ namespace App\Services\QuickAdd;
 
 use App\Models\User;
 use App\Services\WhatsApp\WhatsAppMessageFormat;
+use App\Support\DecimalMath;
 use Illuminate\Support\Str;
 
 class QuickAddParser
@@ -61,7 +62,7 @@ class QuickAddParser
         return ['ambiguous_account' => $ambiguousAccount, 'type' => $type, 'amount' => $amount, 'account_id' => $account?->id, 'account_name' => $account?->name, 'related_account_id' => $related?->id, 'related_account_name' => $related?->name, 'category_id' => $category?->id, 'category_name' => $category?->name, 'note' => $this->note($raw), 'date' => WhatsAppMessageFormat::today()->toDateString(), 'missing' => $missing, 'confidence' => round(min(1, $confidence), 2), 'source' => 'rule'];
     }
 
-    private function amount(string $text): ?float
+    private function amount(string $text): ?string
     {
         preg_match_all('/(?<![\pL\pN.,])(?:rp\s*)?(-?\d+(?:[.,]\d+)*)\s*(juta|ribu|jt|rb|k)?(?![\pL\pN.,])/iu', $text, $matches, PREG_SET_ORDER);
         if (! $matches) {
@@ -85,13 +86,14 @@ class QuickAddParser
         } else {
             return null;
         }
-        $amount = (float) $number * match ($unit) {
-            'jt', 'juta' => 1_000_000,
-            'rb', 'ribu', 'k' => 1000,
-            default => 1,
+        $multiplier = match ($unit) {
+            'jt', 'juta' => '1000000',
+            'rb', 'ribu', 'k' => '1000',
+            default => '1',
         };
+        $amount = DecimalMath::multiply($number, $multiplier);
 
-        return $amount > 0 && $amount <= 9999999999999.99 ? round($amount, 2) : null;
+        return DecimalMath::compare($amount, '0.00') > 0 && DecimalMath::compare($amount, '9999999999999.99') <= 0 ? $amount : null;
     }
 
     private function type(string $s): string

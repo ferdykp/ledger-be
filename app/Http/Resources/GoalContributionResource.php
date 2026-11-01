@@ -12,8 +12,9 @@ class GoalContributionResource extends JsonResource
         return [
             'id' => $this->id,
             'goal_id' => $this->goal_id,
-            'amount' => (float) $this->amount,
+            'amount' => (string) $this->amount,
             'date' => $this->date?->format('Y-m-d'),
+            'note' => $this->note,
             'created_at' => $this->created_at?->toISOString(),
         ];
     }

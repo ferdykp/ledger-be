@@ -7,7 +7,13 @@ use App\Http\Controllers\BudgetController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ExpenseRecapController;
 use App\Http\Controllers\GoalController;
+use App\Http\Controllers\GoalItemController;
+use App\Http\Controllers\GoalObligationController;
+use App\Http\Controllers\GoalCashAllocationController;
+use App\Http\Controllers\GoalFundingController;
+use App\Http\Controllers\AssetController;
 use App\Http\Controllers\ImportController;
+use App\Http\Controllers\NetWorthController;
 use App\Http\Controllers\PasswordController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\TransactionController;
@@ -39,6 +45,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('reports/expenses', ExpenseRecapController::class);
     Route::get('reports/monthly', [TransactionController::class, 'report']);
     Route::get('reports/cash-flow', [TransactionController::class, 'cashFlow']);
+    Route::get('reports/net-worth', NetWorthController::class);
     Route::get('transactions/export', [TransactionController::class, 'export']);
     Route::apiResource('transactions', TransactionController::class)->only(['index', 'store', 'show', 'update', 'destroy']);
     Route::post('imports/scan', [ImportController::class, 'scan'])->middleware('throttle:20,1');
@@ -48,6 +55,25 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('goals', GoalController::class);
     Route::get('goals/{goal}/contributions', [GoalController::class, 'contributions']);
     Route::post('goals/{goal}/contributions', [GoalController::class, 'addContribution']);
+    Route::get('goals/{goal}/items', [GoalItemController::class, 'index']);
+    Route::post('goals/{goal}/items', [GoalItemController::class, 'store']);
+    Route::put('goals/{goal}/items/{item}', [GoalItemController::class, 'update']);
+    Route::delete('goals/{goal}/items/{item}', [GoalItemController::class, 'destroy']);
+    Route::get('goals/{goal}/items/{item}/obligations', [GoalObligationController::class, 'index']);
+    Route::post('goals/{goal}/items/{item}/obligations', [GoalObligationController::class, 'store']);
+    Route::put('goals/{goal}/items/{item}/obligations/{obligation}', [GoalObligationController::class, 'update']);
+    Route::delete('goals/{goal}/items/{item}/obligations/{obligation}', [GoalObligationController::class, 'destroy']);
+    Route::get('goals/{goal}/cash-allocations', [GoalCashAllocationController::class, 'index']);
+    Route::post('goals/{goal}/cash-allocations', [GoalCashAllocationController::class, 'store']);
+    Route::get('cash-allocations/accounts', [GoalCashAllocationController::class, 'accounts']);
+    Route::get('goals/{goal}/funding', [GoalFundingController::class, 'summary']);
+    Route::get('goals/{goal}/asset-allocations', [GoalFundingController::class, 'assets']);
+    Route::post('goals/{goal}/assets/{asset}/allocations', [GoalFundingController::class, 'allocateAsset']);
+    Route::apiResource('assets', AssetController::class)->only(['index', 'store', 'show', 'destroy']);
+    Route::post('assets/{asset}/transactions', [AssetController::class, 'storeTransaction']);
+    Route::post('assets/transactions/{transaction}/status', [AssetController::class, 'transition']);
+    Route::post('assets/transactions/{transaction}/refunds', [AssetController::class, 'refund']);
+    Route::post('assets/{asset}/prices', [AssetController::class, 'setPrice']);
 
     Route::post(
         '/integrations/whatsapp/otp/send',
