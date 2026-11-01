@@ -16,6 +16,10 @@ class StoreAssetRequest extends FormRequest
             'provider' => ['nullable', 'string', 'max:160'],
             'identifier' => ['nullable', 'string', 'max:100'],
             'storage_type' => ['nullable', Rule::in(['physical', 'digital'])],
+            'ownership_source' => ['nullable', Rule::in(['existing', 'new'])],
+            'initial_quantity' => ['required_if:ownership_source,existing', 'nullable', 'numeric', 'gt:0', 'decimal:0,8', 'max:999999999.99999999'],
+            'initial_cost_basis' => ['required_if:ownership_source,existing', 'nullable', 'numeric', 'gt:0', 'decimal:0,2', 'max:9999999999999.99'],
+            'initial_date' => ['required_if:ownership_source,existing', 'nullable', 'date'],
         ];
     }
 }

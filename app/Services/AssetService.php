@@ -25,7 +25,35 @@ class AssetService
 
     public function create(User $user, array $data): Asset
     {
-        return $user->assets()->create($data + ['currency' => 'IDR']);
+        return DB::transaction(function () use ($user, $data) {
+            $ownershipSource = $data['ownership_source'] ?? 'new';
+            $initial = [
+                'quantity' => $data['initial_quantity'] ?? null,
+                'amount' => $data['initial_cost_basis'] ?? null,
+                'transaction_date' => $data['initial_date'] ?? null,
+            ];
+            unset($data['ownership_source'], $data['initial_quantity'], $data['initial_cost_basis'], $data['initial_date']);
+            $asset = $user->assets()->create($data + ['currency' => 'IDR']);
+
+            if ($ownershipSource === 'existing') {
+                $type = $asset->type === 'gold' ? 'purchase' : 'subscription';
+                $quantity = (string) $initial['quantity'];
+                $amount = (string) $initial['amount'];
+                $this->recordTransaction($user, $asset, [
+                    'type' => $type,
+                    'status' => 'settled',
+                    'amount' => $amount,
+                    'quantity' => $quantity,
+                    'unit_price' => DecimalMath::divide($amount, $quantity, 8),
+                    'fees' => '0.00',
+                    'cash_debited' => false,
+                    'transaction_date' => $initial['transaction_date'],
+                    'notes' => 'Saldo awal aset yang sudah dimiliki sebelum menggunakan Ledger.',
+                ]);
+            }
+
+            return $asset->fresh();
+        }, 3);
     }
 
     public function recordTransaction(User $user, Asset $asset, array $data): AssetTransaction
