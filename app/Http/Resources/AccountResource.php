@@ -13,6 +13,7 @@ class AccountResource extends JsonResource
             'id' => $this->id,
             'name' => $this->name,
             'type' => $this->type,
+            'purpose' => $this->purpose ?? 'operational',
             'balance' => (string) $this->balance,
             'color' => $this->color,
             'icon' => $this->icon,

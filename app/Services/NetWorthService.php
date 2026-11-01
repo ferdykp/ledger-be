@@ -16,7 +16,7 @@ class NetWorthService
     public function summary(User $user): array
     {
         $cash = '0.00';
-        foreach (Account::where('user_id', $user->id)->get(['balance']) as $account) {
+        foreach (Account::where('user_id', $user->id)->whereIn('type', ['cash', 'bank', 'ewallet'])->get(['balance']) as $account) {
             $cash = DecimalMath::add($cash, (string) $account->balance);
         }
 

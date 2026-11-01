@@ -12,6 +12,17 @@ use Illuminate\Http\Request;
 
 class GoalFundingController extends Controller
 {
+    public function all(Request $request, GoalFinancialSummaryService $service)
+    {
+        $rows = Goal::where('user_id', $request->user()->id)
+            ->with(['items.obligations.payments'])
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(fn (Goal $goal) => $service->forGoal($goal));
+
+        return response()->json(['data' => $rows]);
+    }
+
     public function summary(Request $request, Goal $goal, GoalFinancialSummaryService $service)
     {
         abort_unless($goal->user_id === $request->user()->id, 404);

@@ -30,6 +30,9 @@ class GoalCashAllocationService
             }
 
             $account = Account::where('user_id', $user->id)->lockForUpdate()->findOrFail($data['account_id']);
+            if (! in_array($account->type, ['cash', 'bank', 'ewallet'], true)) {
+                throw ValidationException::withMessages(['account_id' => 'Alokasi target hanya dapat menggunakan akun tunai, bank, atau e-wallet.']);
+            }
             $goal = Goal::where('user_id', $user->id)->lockForUpdate()->findOrFail($goal->id);
             $totalAccountAllocated = $this->sumAllocations(GoalCashAllocation::where('user_id', $user->id)->where('account_id', $account->id)->lockForUpdate()->get());
             $goalAllocated = $this->sumAllocations(GoalCashAllocation::where('user_id', $user->id)->where('goal_id', $goal->id)->where('account_id', $account->id)->get());
@@ -58,17 +61,23 @@ class GoalCashAllocationService
 
     public function summary(User $user): array
     {
-        return Account::where('user_id', $user->id)->where('is_archived', false)->get()->map(function (Account $account) use ($user) {
+        return Account::where('user_id', $user->id)->where('is_archived', false)->whereIn('type', ['cash', 'bank', 'ewallet'])->get()->map(function (Account $account) use ($user) {
             $entries = GoalCashAllocation::with('goal')->where('user_id', $user->id)->where('account_id', $account->id)->get();
-            $allocated = $this->sumAllocations($entries);
-            $available = DecimalMath::subtract((string) $account->balance, $allocated);
+            $nominalAllocated = $this->sumAllocations($entries);
+            $backing = DecimalMath::compare((string) $account->balance, '0.00') > 0 ? (string) $account->balance : '0.00';
+            $allocated = DecimalMath::compare($nominalAllocated, '0.00') > 0 ? $nominalAllocated : '0.00';
+            if (DecimalMath::compare($allocated, $backing) > 0) $allocated = $backing;
+            $available = DecimalMath::subtract($backing, $allocated);
             return [
                 'account_id' => $account->id,
                 'account_name' => $account->name,
+                'type' => $account->type,
+                'purpose' => $account->purpose ?? 'operational',
                 'balance' => (string) $account->balance,
                 'allocated' => $allocated,
+                'nominal_allocated' => $nominalAllocated,
                 'unallocated' => DecimalMath::compare($available, '0.00') < 0 ? '0.00' : $available,
-                'allocation_deficit' => DecimalMath::compare($available, '0.00') < 0 ? bcmul($available, '-1', 2) : '0.00',
+                'allocation_deficit' => DecimalMath::compare($nominalAllocated, $backing) > 0 ? DecimalMath::subtract($nominalAllocated, $backing) : '0.00',
                 'goals' => $entries->groupBy('goal_id')->map(function ($rows) {
                     return ['goal_id' => $rows->first()->goal_id, 'goal_name' => $rows->first()->goal?->name, 'amount' => $this->sumAllocations($rows)];
                 })->values(),

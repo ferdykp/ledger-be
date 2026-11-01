@@ -31,12 +31,10 @@ class AssetController extends Controller
         return response()->json(['data' => $service->snapshot($asset)]);
     }
 
-    public function destroy(Request $request, Asset $asset)
+    public function destroy(Request $request, Asset $asset, AssetService $service)
     {
-        abort_unless($asset->user_id === $request->user()->id, 404);
-        abort_if($asset->transactions()->exists() || $asset->allocations()->exists(), 409, 'Aset yang memiliki riwayat atau alokasi tidak dapat dihapus.');
-        $asset->delete();
-        return response()->json(['message' => 'Aset dihapus.']);
+        $service->delete($request->user(), $asset);
+        return response()->json(['message' => 'Aset dan transaksi terkait berhasil dihapus. Saldo rekening sudah disesuaikan.']);
     }
 
     public function storeTransaction(StoreAssetTransactionRequest $request, Asset $asset, AssetService $service)

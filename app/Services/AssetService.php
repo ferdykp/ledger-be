@@ -27,24 +27,31 @@ class AssetService
     {
         return DB::transaction(function () use ($user, $data) {
             $ownershipSource = $data['ownership_source'] ?? 'new';
+            $assetType = $data['type'];
             $initial = [
                 'quantity' => $data['initial_quantity'] ?? null,
                 'amount' => $data['initial_cost_basis'] ?? null,
+                'unit_price' => $data['initial_unit_price'] ?? null,
                 'transaction_date' => $data['initial_date'] ?? null,
             ];
-            unset($data['ownership_source'], $data['initial_quantity'], $data['initial_cost_basis'], $data['initial_date']);
+            unset($data['ownership_source'], $data['initial_quantity'], $data['initial_cost_basis'], $data['initial_unit_price'], $data['initial_date']);
             $asset = $user->assets()->create($data + ['currency' => 'IDR']);
 
             if ($ownershipSource === 'existing') {
                 $type = $asset->type === 'gold' ? 'purchase' : 'subscription';
-                $quantity = (string) $initial['quantity'];
                 $amount = (string) $initial['amount'];
+                $unitPrice = $assetType === 'rdpu'
+                    ? (string) $initial['unit_price']
+                    : DecimalMath::divide($amount, (string) $initial['quantity'], 8);
+                $quantity = $assetType === 'rdpu'
+                    ? DecimalMath::divide($amount, $unitPrice, 8)
+                    : (string) $initial['quantity'];
                 $this->recordTransaction($user, $asset, [
                     'type' => $type,
                     'status' => 'settled',
                     'amount' => $amount,
                     'quantity' => $quantity,
-                    'unit_price' => DecimalMath::divide($amount, $quantity, 8),
+                    'unit_price' => $unitPrice,
                     'fees' => '0.00',
                     'cash_debited' => false,
                     'transaction_date' => $initial['transaction_date'],
@@ -53,6 +60,66 @@ class AssetService
             }
 
             return $asset->fresh();
+        }, 3);
+    }
+
+    public function delete(User $user, Asset $asset): void
+    {
+        abort_unless($asset->user_id === $user->id, 404);
+
+        DB::transaction(function () use ($user, $asset) {
+            $asset = Asset::where('user_id', $user->id)->lockForUpdate()->findOrFail($asset->id);
+            $assetTransactions = AssetTransaction::where('user_id', $user->id)
+                ->where('asset_id', $asset->id)
+                ->lockForUpdate()
+                ->get();
+            $transactionIds = $assetTransactions
+                ->flatMap(fn (AssetTransaction $entry) => [$entry->cash_transaction_id, $entry->settlement_transaction_id])
+                ->filter()
+                ->unique()
+                ->values();
+            $refunds = AssetRefund::whereIn('asset_transaction_id', $assetTransactions->pluck('id'))
+                ->lockForUpdate()
+                ->get();
+            $transactionIds = $transactionIds->merge($refunds->pluck('transaction_id'))->filter()->unique()->values();
+            $cashEntries = Transaction::where('user_id', $user->id)
+                ->whereIn('id', $transactionIds)
+                ->orderBy('account_id')
+                ->lockForUpdate()
+                ->get();
+            $accountIds = $cashEntries->pluck('account_id')->filter()->unique();
+            $accounts = Account::where('user_id', $user->id)
+                ->whereIn('id', $accountIds)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+
+            foreach ($cashEntries as $entry) {
+                if (! in_array($entry->financial_purpose, ['asset_purchase', 'asset_sale', 'asset_refund'], true)) {
+                    throw ValidationException::withMessages(['asset' => 'Arus kas aset tidak dikenali. Aset belum dihapus agar saldo tetap aman.']);
+                }
+                $account = $accounts->get($entry->account_id);
+                if (! $account) {
+                    throw ValidationException::withMessages(['asset' => 'Rekening terkait tidak ditemukan. Aset belum dihapus agar saldo tetap aman.']);
+                }
+                if ($entry->type === 'expense') {
+                    $account->balance = DecimalMath::add((string) $account->balance, (string) $entry->amount);
+                } elseif ($entry->type === 'income') {
+                    $account->balance = DecimalMath::subtract((string) $account->balance, (string) $entry->amount);
+                } else {
+                    throw ValidationException::withMessages(['asset' => 'Jenis arus kas aset tidak dapat dibalik otomatis. Aset belum dihapus agar saldo tetap aman.']);
+                }
+                $account->save();
+            }
+
+            $refundIds = $refunds->pluck('id');
+            if ($refundIds->isNotEmpty()) AssetRefund::whereIn('id', $refundIds)->delete();
+            if ($transactionIds->isNotEmpty()) Transaction::where('user_id', $user->id)->whereIn('id', $transactionIds)->delete();
+            GoalAssetAllocation::where('asset_id', $asset->id)->delete();
+            AssetTransaction::where('asset_id', $asset->id)->delete();
+            $asset->prices()->delete();
+            $asset->delete();
         }, 3);
     }
 

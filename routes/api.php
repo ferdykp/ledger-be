@@ -52,6 +52,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('budgets', BudgetController::class)->only(['index', 'store', 'destroy']);
     Route::apiResource('bills', BillController::class)->only(['index', 'store', 'update', 'destroy']);
     Route::post('bills/{bill}/paid', [BillController::class, 'markPaid']);
+    Route::get('goals/funding-summary', [GoalFundingController::class, 'all']);
     Route::apiResource('goals', GoalController::class);
     Route::get('goals/{goal}/contributions', [GoalController::class, 'contributions']);
     Route::post('goals/{goal}/contributions', [GoalController::class, 'addContribution']);

@@ -15,6 +15,7 @@ class Account extends Model
         'user_id',
         'name',
         'type',
+        'purpose',
         'balance',
         'color',
         'icon',
