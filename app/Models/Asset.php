@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Asset extends Model
 {
-    protected $fillable = ['user_id', 'type', 'name', 'provider', 'identifier', 'storage_type', 'currency'];
+    protected $fillable = ['user_id', 'type', 'valuation_mode', 'manual_current_value', 'name', 'provider', 'identifier', 'storage_type', 'currency'];
     public function user(): BelongsTo { return $this->belongsTo(User::class); }
     public function transactions(): HasMany { return $this->hasMany(AssetTransaction::class); }
     public function prices(): HasMany { return $this->hasMany(AssetPrice::class); }

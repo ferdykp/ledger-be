@@ -19,7 +19,6 @@ class StoreAssetRequest extends FormRequest
             'ownership_source' => ['nullable', Rule::in(['existing', 'new'])],
             'initial_quantity' => [Rule::requiredIf(fn () => $this->input('ownership_source') === 'existing' && $this->input('type') === 'gold'), 'nullable', 'numeric', 'gt:0', 'decimal:0,8', 'max:999999999.99999999'],
             'initial_cost_basis' => ['required_if:ownership_source,existing', 'nullable', 'numeric', 'gt:0', 'decimal:0,2', 'max:9999999999999.99'],
-            'initial_unit_price' => [Rule::requiredIf(fn () => $this->input('ownership_source') === 'existing' && $this->input('type') === 'rdpu'), 'nullable', 'numeric', 'gt:0', 'decimal:0,8', 'max:9999999999999999.99999999'],
             'initial_date' => ['required_if:ownership_source,existing', 'nullable', 'date'],
         ];
     }
