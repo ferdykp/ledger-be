@@ -3,14 +3,16 @@
 namespace App\Http\Controllers;
 
 use App\Models\Bill;
+use App\Models\BillPayment;
 use App\Services\BillService;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class BillController extends Controller
 {
     public function __construct(private BillService $bills) {}
 
-    private function rules(): array
+    private function rules(Request $request): array
     {
         return [
             'name' => 'required|string|max:120',
@@ -21,6 +23,14 @@ class BillController extends Controller
             'category' => 'nullable|string|max:80',
             'note' => 'nullable|string|max:1000',
             'reminder_enabled' => 'sometimes|boolean',
+            'auto_pay_enabled' => 'sometimes|boolean',
+            'auto_pay_account_id' => [
+                'nullable', 'required_if:auto_pay_enabled,1', 'integer',
+                Rule::exists('accounts', 'id')->where(fn ($query) => $query
+                    ->where('user_id', $request->user()->id)
+                    ->where('is_archived', false)
+                    ->whereIn('type', ['cash', 'bank', 'ewallet'])),
+            ],
         ];
     }
 
@@ -34,24 +44,40 @@ class BillController extends Controller
         $active = $request->user()->bills()->where('status', 'active');
         $summary = (clone $active)->selectRaw("COUNT(*) AS active_count, COALESCE(SUM(amount * CASE frequency WHEN 'yearly' THEN 1.0/12 WHEN 'weekly' THEN 52.0/12 WHEN 'monthly' THEN 1 ELSE 0 END), 0) AS monthly_total")->first();
         $overdue = (clone $active)->where('reminder_enabled', true)->whereDate('due_date', '<=', $today)->count();
-        $page = $request->user()->bills()->orderBy('due_date')->orderBy('id')->paginate(20);
+        $page = $request->user()->bills()->with(['autoPayAccount:id,name', 'latestAutoPayment'])->orderBy('due_date')->orderBy('id')->paginate(20);
+        $attentionCount = BillPayment::query()->where('user_id', $request->user()->id)
+            ->whereIn('status', ['insufficient_balance', 'account_unavailable'])
+            ->whereHas('bill', fn ($query) => $query->where('auto_pay_enabled', true)->where('status', 'active'))
+            ->distinct('bill_id')->count('bill_id');
 
         return response()->json([...$page->toArray(), 'summary' => [
             'active_count' => (int) $summary->active_count,
             'monthly_total' => (float) $summary->monthly_total,
             'overdue_count' => $overdue,
+            'auto_pay_attention_count' => $attentionCount,
         ]]);
     }
 
     public function store(Request $request)
     {
-        return response()->json(['data' => $this->bills->save($request->user(), $request->validate($this->rules()))], 201);
+        $data = $request->validate($this->rules($request));
+        $data['auto_pay_enabled'] = (bool) ($data['auto_pay_enabled'] ?? false);
+        $data['auto_pay_account_id'] = $data['auto_pay_enabled'] ? ($data['auto_pay_account_id'] ?? null) : null;
+        abort_if($data['auto_pay_enabled'] && ($data['status'] ?? 'active') === 'paid', 422, 'Tagihan otomatis tidak dapat langsung dibuat dengan status lunas.');
+        return response()->json(['data' => $this->bills->save($request->user(), $data)], 201);
     }
 
     public function update(Request $request, Bill $bill)
     {
         abort_unless($bill->user_id === $request->user()->id, 403);
-        $bill = $this->bills->save($request->user(), $request->validate($this->rules()), $bill);
+        $data = $request->validate($this->rules($request));
+        $autoEnabled = (bool) ($data['auto_pay_enabled'] ?? $bill->auto_pay_enabled);
+        $status = $data['status'] ?? $bill->status;
+        abort_if($autoEnabled && $status === 'paid', 422, 'Status lunas dicatat otomatis setelah saldo berhasil dipotong.');
+        $data['auto_pay_enabled'] = $autoEnabled;
+        $data['auto_pay_account_id'] = $autoEnabled ? ($data['auto_pay_account_id'] ?? $bill->auto_pay_account_id) : null;
+        abort_if($autoEnabled && ! $data['auto_pay_account_id'], 422, 'Pilih rekening untuk pembayaran otomatis.');
+        $bill = $this->bills->save($request->user(), $data, $bill);
 
         return response()->json(['data' => $bill->fresh()]);
     }
@@ -67,6 +93,7 @@ class BillController extends Controller
     public function markPaid(Request $request, Bill $bill)
     {
         abort_unless($bill->user_id === $request->user()->id, 403);
+        abort_if($bill->auto_pay_enabled, 409, 'Tagihan ini sudah memakai pembayaran otomatis.');
         $bill = $this->bills->save($request->user(), ['status' => 'paid'], $bill);
 
         return response()->json(['data' => $bill]);

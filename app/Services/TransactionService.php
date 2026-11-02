@@ -7,6 +7,7 @@ use App\Models\Transaction;
 use App\Models\User;
 use App\Models\GoalObligation;
 use App\Models\GoalCashAllocation;
+use App\Models\BillPayment;
 use App\Support\DecimalMath;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
@@ -109,6 +110,7 @@ class TransactionService
 
         return DB::transaction(function () use ($user, $transaction, $data) {
             $transaction = $user->transactions()->lockForUpdate()->findOrFail($transaction->id);
+            abort_if(BillPayment::where('transaction_id', $transaction->id)->exists(), 409, 'Transaksi pembayaran otomatis dikelola dari menu Tagihan agar riwayat saldo tetap konsisten.');
             abort_if($transaction->financial_purpose, 409, 'Transaksi investasi hanya dapat diubah dari halaman aset.');
             $this->lockAccounts($user, [$transaction->account_id, $transaction->related_account_id, $data['account_id'], $data['to_account_id'] ?? null]);
             $oldAccount = $this->lockAccount($user, (int) $transaction->account_id);
@@ -155,6 +157,7 @@ class TransactionService
         abort_unless($transaction->user_id === $user->id, 403);
         DB::transaction(function () use ($user, $transaction) {
             $transaction = $user->transactions()->lockForUpdate()->findOrFail($transaction->id);
+            abort_if(BillPayment::where('transaction_id', $transaction->id)->exists(), 409, 'Transaksi pembayaran otomatis dikelola dari menu Tagihan agar riwayat saldo tetap konsisten.');
             abort_if($transaction->financial_purpose, 409, 'Transaksi investasi hanya dapat dibatalkan dari halaman aset.');
             $this->lockAccounts($user, [$transaction->account_id, $transaction->related_account_id]);
             $account = $this->lockAccount($user, (int) $transaction->account_id);
