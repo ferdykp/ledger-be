@@ -33,7 +33,9 @@ final class DecimalMath
 
     public static function round(string|int $value, int $scale = 2): string
     {
-        $offset = $scale === 0 ? '0.5' : '0.'.str_repeat('0', $scale - 1).'5';
+        // Add half of the last retained unit at one extra decimal place,
+        // then truncate to the requested precision (bc math does not round).
+        $offset = $scale === 0 ? '0.5' : '0.'.str_repeat('0', $scale).'5';
         return bcadd(bcadd((string) $value, $offset, $scale + 1), '0', $scale);
     }
 

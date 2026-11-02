@@ -12,6 +12,7 @@ use App\Http\Controllers\GoalObligationController;
 use App\Http\Controllers\GoalCashAllocationController;
 use App\Http\Controllers\GoalFundingController;
 use App\Http\Controllers\AssetController;
+use App\Http\Controllers\SharedFinancialWorkspaceController;
 use App\Http\Controllers\ImportController;
 use App\Http\Controllers\NetWorthController;
 use App\Http\Controllers\PasswordController;
@@ -79,6 +80,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('assets/transactions/{transaction}/status', [AssetController::class, 'transition']);
     Route::post('assets/transactions/{transaction}/refunds', [AssetController::class, 'refund']);
     Route::post('assets/{asset}/prices', [AssetController::class, 'setPrice']);
+
+    Route::get('shared-workspaces/invitations/pending', [SharedFinancialWorkspaceController::class, 'pendingInvitations']);
+    Route::post('shared-workspaces/invitations/accept', [SharedFinancialWorkspaceController::class, 'acceptInvitation']);
+    Route::post('shared-workspaces/invitations/{invitation}/accept', [SharedFinancialWorkspaceController::class, 'acceptPendingInvitation']);
+    Route::get('shared-workspaces', [SharedFinancialWorkspaceController::class, 'index']);
+    Route::post('shared-workspaces', [SharedFinancialWorkspaceController::class, 'store']);
+    Route::post('shared-workspaces/{workspace}/invitations', [SharedFinancialWorkspaceController::class, 'invite']);
+    Route::delete('shared-workspaces/{workspace}/invitations/{invitation}', [SharedFinancialWorkspaceController::class, 'revokeInvitation']);
+    Route::post('shared-workspaces/{workspace}/contributions', [SharedFinancialWorkspaceController::class, 'contribute']);
+    Route::post('shared-workspaces/{workspace}/withdrawals', [SharedFinancialWorkspaceController::class, 'withdraw']);
+    Route::post('shared-workspaces/{workspace}/assets', [SharedFinancialWorkspaceController::class, 'createAsset']);
+    Route::post('shared-workspaces/{workspace}/goals', [SharedFinancialWorkspaceController::class, 'createGoal']);
+    Route::post('shared-workspaces/{workspace}/goals/{goal}/allocations', [SharedFinancialWorkspaceController::class, 'allocateGoal']);
+    Route::post('shared-workspaces/{workspace}/assets/{asset}/transactions', [SharedFinancialWorkspaceController::class, 'transactAsset']);
+    Route::delete('shared-workspaces/{workspace}/members/{member}', [SharedFinancialWorkspaceController::class, 'removeMember']);
+    Route::get('shared-workspaces/{workspace}', [SharedFinancialWorkspaceController::class, 'show']);
 
     Route::post(
         '/integrations/whatsapp/otp/send',
