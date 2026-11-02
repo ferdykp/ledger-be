@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Bill extends Model
 {
@@ -27,7 +28,7 @@ class Bill extends Model
         return $this->hasMany(BillPayment::class);
     }
 
-    public function latestAutoPayment(): HasMany
+    public function latestAutoPayment(): HasOne
     {
         return $this->hasMany(BillPayment::class)->one()->latestOfMany('scheduled_for');
     }
