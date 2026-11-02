@@ -17,6 +17,20 @@ class SharedFinancialWorkspaceTest extends TestCase
         Notification::fake();
     }
 
+    public function test_production_invitation_links_never_point_to_localhost(): void
+    {
+        $this->app['env'] = 'production';
+        config(['app.frontend_url' => 'http://localhost:5173']);
+        $owner = User::factory()->create();
+        $this->actingAs($owner);
+        $workspace = $this->postJson('/api/shared-workspaces', ['name' => 'Emas Bareng'])->assertCreated()->json('data');
+
+        $invitation = $this->postJson("/api/shared-workspaces/{$workspace['id']}/invitations", ['email' => 'partner@example.com'])
+            ->assertCreated()->json('data');
+
+        $this->assertStringStartsWith('https://ledger.fdevsite.cloud/kolaborasi?invite=', $invitation['invite_url']);
+    }
+
     public function test_email_invitation_is_scoped_to_the_invited_member_and_acceptance_is_required(): void
     {
         $owner = User::factory()->create();

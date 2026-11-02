@@ -31,7 +31,12 @@ class SharedFinancialWorkspaceController extends Controller
     {
         $data = $request->validate(['email' => ['required', 'email', 'max:255']]);
         $invitation = $service->invite($request->user(), $workspace, $data['email']);
-        $inviteUrl = rtrim(config('app.frontend_url', 'http://localhost:5173'), '/').'/kolaborasi?invite='.urlencode($invitation['invite_token']);
+        $frontendUrl = rtrim(config('app.frontend_url', 'https://ledger.fdevsite.cloud'), '/');
+        $frontendHost = strtolower((string) parse_url($frontendUrl, PHP_URL_HOST));
+        if (app()->environment('production') && in_array($frontendHost, ['localhost', '127.0.0.1', '::1'], true)) {
+            $frontendUrl = 'https://ledger.fdevsite.cloud';
+        }
+        $inviteUrl = $frontendUrl.'/kolaborasi?invite='.urlencode($invitation['invite_token']);
         $invitation['invite_url'] = $inviteUrl;
         try {
             Notification::route('mail', $invitation['email'])->notify(new SharedWorkspaceInvitationNotification(

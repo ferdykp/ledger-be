@@ -118,7 +118,19 @@ return [
     |
     */
 
-    'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+    'frontend_url' => (static function () {
+        $configuredUrl = env('FRONTEND_URL');
+        $isProduction = env('APP_ENV') === 'production';
+        $configuredHost = strtolower((string) parse_url((string) $configuredUrl, PHP_URL_HOST));
+
+        // Do not generate unusable localhost links when a production .env was
+        // originally copied from the local development example.
+        if ($isProduction && in_array($configuredHost, ['localhost', '127.0.0.1', '::1'], true)) {
+            return 'https://ledger.fdevsite.cloud';
+        }
+
+        return $configuredUrl ?: ($isProduction ? 'https://ledger.fdevsite.cloud' : 'http://localhost:5173');
+    })(),
 
     'maintenance' => [
         'driver' => env('APP_MAINTENANCE_DRIVER', 'file'),
