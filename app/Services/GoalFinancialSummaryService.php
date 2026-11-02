@@ -63,7 +63,7 @@ class GoalFinancialSummaryService
             $quantity = '0.00000000';
             foreach ($rows as $row) $quantity = $row->action === 'allocate' ? DecimalMath::add($quantity, (string) $row->quantity, 8) : DecimalMath::subtract($quantity, (string) $row->quantity, 8);
             $snapshot = $this->assets->snapshot($asset);
-            $allocatedValue = $snapshot['latest_price'] ? DecimalMath::quantityValue($quantity, $snapshot['latest_price'], 8) : null;
+            $allocatedValue = $snapshot['allocated_value'];
             if ($allocatedValue !== null) $assetValue = DecimalMath::add($assetValue, $allocatedValue);
             $assetSummary[] = ['asset_id' => $asset->id, 'name' => $asset->name, 'type' => $asset->type, 'quantity' => $quantity, 'value' => $allocatedValue, 'price_timestamp' => $snapshot['valuation_at']];
         }

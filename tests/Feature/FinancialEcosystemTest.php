@@ -152,4 +152,128 @@ class FinancialEcosystemTest extends TestCase
         $this->assertSame('4990000.00', $summary['total_assets']);
         $this->assertSame('0.00', $this->getJson('/api/reports/monthly?month=2026-11')->assertOk()->json('data.expense'));
     }
+
+    public function test_new_rdpu_uses_actual_units_and_nav_and_historical_purchases_do_not_move_cash(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $account = $user->accounts()->create(['name' => 'BCA', 'type' => 'bank', 'balance' => '5000000.00']);
+        $assetId = $this->postJson('/api/assets', ['type' => 'rdpu', 'name' => 'RDPU Unit'])->assertCreated()->json('data.id');
+
+        $this->postJson("/api/assets/$assetId/transactions", [
+            'type' => 'subscription', 'status' => 'confirmed', 'cash_account_id' => $account->id,
+            'cash_debited' => true, 'amount' => '1000000.00', 'quantity' => '980.00000000',
+            'transaction_date' => '2026-11-02',
+        ])->assertCreated();
+        $this->assertSame('4000000.00', $account->fresh()->balance);
+        $this->postJson("/api/assets/$assetId/prices", ['price' => '1050.00000000', 'captured_at' => '2026-11-02'])->assertOk();
+        $asset = $this->getJson('/api/assets')->assertOk()->json('data.0');
+        $this->assertSame('units', $asset['valuation_mode']);
+        $this->assertSame('980.00000000', $asset['quantity']);
+        $this->assertSame('1029000.00', $asset['estimated_value']);
+
+        $this->postJson("/api/assets/$assetId/transactions/import", [
+            'transactions' => [[
+                'action' => 'purchase', 'amount' => '200000.00', 'quantity' => '190.00000000',
+                'transaction_date' => '2026-10-10',
+            ]],
+        ])->assertCreated();
+        $this->assertSame('4000000.00', $account->fresh()->balance);
+        $this->assertSame('1170.00000000', $this->getJson('/api/assets')->assertOk()->json('data.0.quantity'));
+    }
+
+    public function test_value_only_existing_rdpu_never_fabricates_units_or_profit_when_basis_is_unknown(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $asset = $this->postJson('/api/assets', [
+            'type' => 'rdpu', 'name' => 'RDPU lama', 'ownership_source' => 'existing',
+            'opening_mode' => 'value_only', 'initial_current_value' => '5000000.00',
+            'initial_date' => '2026-11-02',
+        ])->assertCreated()->json('data');
+
+        $this->assertSame('value_only', $asset['valuation_mode']);
+        $this->assertNull($asset['quantity']);
+        $this->assertSame('5000000.00', $asset['estimated_value']);
+        $this->assertFalse($asset['cost_basis_known']);
+        $this->assertNull($asset['unrealized_profit_loss']);
+    }
+
+    public function test_monthly_investment_streak_ignores_opening_holdings_and_tracks_confirmed_purchases(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $assetId = $this->postJson('/api/assets', ['type' => 'rdpu', 'name' => 'RDPU rutin'])->assertCreated()->json('data.id');
+        $this->postJson("/api/assets/$assetId/transactions/import", [
+            'transactions' => [[
+                'action' => 'purchase', 'amount' => '100000.00', 'quantity' => '100.00000000',
+                'transaction_date' => '2026-10-10',
+            ], [
+                'action' => 'purchase', 'amount' => '100000.00', 'quantity' => '100.00000000',
+                'transaction_date' => '2026-11-02',
+            ]],
+        ])->assertCreated();
+        $this->putJson('/api/assets/saving-consistency/target', ['type' => 'rdpu', 'amount' => '500000.00'])->assertOk();
+
+        $summary = $this->getJson('/api/assets/saving-consistency')->assertOk()->json('data');
+        $this->assertSame(2, $summary['current_streak']);
+        $this->assertSame(2, $summary['active_months']);
+        $rdpu = collect($summary['monthly_targets'])->firstWhere('type', 'rdpu');
+        $this->assertSame('500000.00', $rdpu['target']);
+        $this->assertSame('100000.00', $rdpu['actual']);
+        $this->assertSame('400000.00', $rdpu['remaining']);
+    }
+
+    public function test_value_only_rdpu_reconciliation_replaces_opening_without_cash_or_duplicate_holdings(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $account = $user->accounts()->create(['name' => 'BCA', 'type' => 'bank', 'balance' => '4000000.00']);
+        $assetId = $this->postJson('/api/assets', [
+            'type' => 'rdpu', 'name' => 'RDPU legacy', 'ownership_source' => 'existing',
+            'opening_mode' => 'value_only', 'initial_current_value' => '5000000.00', 'initial_date' => '2026-10-01',
+        ])->assertCreated()->json('data.id');
+
+        $this->postJson("/api/assets/$assetId/complete-units", [
+            'quantity' => '5000.00000000', 'current_value' => '5000000.00',
+            'nav' => '1000.00000000', 'captured_at' => '2026-11-02',
+        ])->assertOk()->assertJsonPath('data.valuation_mode', 'units')->assertJsonPath('data.quantity', '5000.00000000');
+
+        $asset = $this->getJson('/api/assets')->assertOk()->json('data.0');
+        $this->assertSame('5000000.00', $asset['estimated_value']);
+        $this->assertNull($asset['unrealized_profit_loss']);
+        $this->assertSame('4000000.00', $account->fresh()->balance);
+        $this->assertSame(1, \App\Models\AssetTransaction::where('asset_id', $assetId)->whereNull('superseded_at')->count());
+        $this->assertSame(1, \App\Models\AssetTransaction::where('asset_id', $assetId)->whereNotNull('superseded_at')->count());
+    }
+
+    public function test_historical_import_reconciles_opening_and_never_creates_cash_transactions(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $account = $user->accounts()->create(['name' => 'Cash', 'type' => 'bank', 'balance' => '3000000.00']);
+        $assetId = $this->postJson('/api/assets', [
+            'type' => 'gold', 'name' => 'Emas awal', 'storage_type' => 'digital',
+            'ownership_source' => 'existing', 'initial_quantity' => '1.00000000',
+            'initial_cost_basis' => '1000000.00', 'initial_date' => '2026-01-01',
+        ])->assertCreated()->json('data.id');
+        $rows = [
+            ['action' => 'purchase', 'transaction_date' => '2026-01-01', 'amount' => '1000000.00', 'quantity' => '1.00000000'],
+            ['action' => 'sale', 'transaction_date' => '2026-01-02', 'amount' => '600000.00', 'quantity' => '0.50000000'],
+            ['action' => 'purchase', 'transaction_date' => '2026-01-03', 'amount' => '500000.00', 'quantity' => '0.50000000'],
+        ];
+
+        $this->postJson("/api/assets/$assetId/transactions/import", ['transactions' => $rows])->assertUnprocessable();
+        $this->postJson("/api/assets/$assetId/transactions/import", [
+            'reconcile_opening' => true, 'idempotency_key' => 'history-reconcile-1', 'transactions' => $rows,
+        ])->assertCreated()->assertJsonPath('data.asset.quantity', '1.00000000');
+
+        $asset = $this->getJson('/api/assets')->assertOk()->json('data.0');
+        $this->assertSame('1000000.00', $asset['cost_basis']);
+        $this->assertSame('100000.00', $asset['realized_profit_loss']);
+        $this->assertSame('3000000.00', $account->fresh()->balance);
+        $this->assertSame(3, \App\Models\AssetTransaction::where('asset_id', $assetId)->whereNull('superseded_at')->count());
+        $this->assertSame(1, \App\Models\AssetTransaction::where('asset_id', $assetId)->whereNotNull('superseded_at')->count());
+        $this->assertSame(0, $user->transactions()->count());
+    }
 }

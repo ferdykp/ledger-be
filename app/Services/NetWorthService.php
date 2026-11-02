@@ -36,7 +36,7 @@ class NetWorthService
 
         $inTransit = '0.00';
         foreach (AssetTransaction::where('user_id', $user->id)
-            ->where('type', 'subscription')->where('status', 'pending')->where('cash_debited', true)->get(['amount']) as $pending) {
+            ->whereNull('superseded_at')->where('type', 'subscription')->where('status', 'pending')->where('cash_debited', true)->get(['amount']) as $pending) {
             // The account has already been debited, but RDPU units are not holdings until confirmation.
             $inTransit = DecimalMath::add($inTransit, (string) $pending->amount);
         }

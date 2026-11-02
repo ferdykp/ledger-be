@@ -70,8 +70,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('goals/{goal}/funding', [GoalFundingController::class, 'summary']);
     Route::get('goals/{goal}/asset-allocations', [GoalFundingController::class, 'assets']);
     Route::post('goals/{goal}/assets/{asset}/allocations', [GoalFundingController::class, 'allocateAsset']);
+    Route::get('assets/saving-consistency', [AssetController::class, 'savingConsistency']);
+    Route::put('assets/saving-consistency/target', [AssetController::class, 'setMonthlyTarget']);
     Route::apiResource('assets', AssetController::class)->only(['index', 'store', 'show', 'destroy']);
     Route::post('assets/{asset}/transactions', [AssetController::class, 'storeTransaction']);
+    Route::post('assets/{asset}/complete-units', [AssetController::class, 'completeRdpuUnits']);
+    Route::post('assets/{asset}/transactions/import', [AssetController::class, 'importHistory']);
     Route::post('assets/transactions/{transaction}/status', [AssetController::class, 'transition']);
     Route::post('assets/transactions/{transaction}/refunds', [AssetController::class, 'refund']);
     Route::post('assets/{asset}/prices', [AssetController::class, 'setPrice']);
