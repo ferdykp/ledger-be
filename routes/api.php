@@ -57,6 +57,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('goals', GoalController::class);
     Route::get('goals/{goal}/contributions', [GoalController::class, 'contributions']);
     Route::post('goals/{goal}/contributions', [GoalController::class, 'addContribution']);
+    Route::put('goals/{goal}/contributions/{contribution}', [GoalController::class, 'updateContribution']);
+    Route::delete('goals/{goal}/contributions/{contribution}', [GoalController::class, 'deleteContribution']);
     Route::get('goals/{goal}/items', [GoalItemController::class, 'index']);
     Route::post('goals/{goal}/items', [GoalItemController::class, 'store']);
     Route::put('goals/{goal}/items/{item}', [GoalItemController::class, 'update']);
@@ -73,6 +75,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('goals/{goal}/assets/{asset}/allocations', [GoalFundingController::class, 'allocateAsset']);
     Route::get('assets/saving-consistency', [AssetController::class, 'savingConsistency']);
     Route::put('assets/saving-consistency/target', [AssetController::class, 'setMonthlyTarget']);
+    Route::delete('assets/saving-consistency/target', [AssetController::class, 'deleteMonthlyTarget']);
+    Route::put('assets/{asset}', [AssetController::class, 'update']);
     Route::apiResource('assets', AssetController::class)->only(['index', 'store', 'show', 'destroy']);
     Route::post('assets/{asset}/transactions', [AssetController::class, 'storeTransaction']);
     Route::post('assets/{asset}/complete-units', [AssetController::class, 'completeRdpuUnits']);
@@ -86,12 +90,18 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('shared-workspaces/invitations/{invitation}/accept', [SharedFinancialWorkspaceController::class, 'acceptPendingInvitation']);
     Route::get('shared-workspaces', [SharedFinancialWorkspaceController::class, 'index']);
     Route::post('shared-workspaces', [SharedFinancialWorkspaceController::class, 'store']);
+    Route::put('shared-workspaces/{workspace}', [SharedFinancialWorkspaceController::class, 'update']);
+    Route::delete('shared-workspaces/{workspace}', [SharedFinancialWorkspaceController::class, 'destroy']);
     Route::post('shared-workspaces/{workspace}/invitations', [SharedFinancialWorkspaceController::class, 'invite']);
     Route::delete('shared-workspaces/{workspace}/invitations/{invitation}', [SharedFinancialWorkspaceController::class, 'revokeInvitation']);
     Route::post('shared-workspaces/{workspace}/contributions', [SharedFinancialWorkspaceController::class, 'contribute']);
     Route::post('shared-workspaces/{workspace}/withdrawals', [SharedFinancialWorkspaceController::class, 'withdraw']);
     Route::post('shared-workspaces/{workspace}/assets', [SharedFinancialWorkspaceController::class, 'createAsset']);
+    Route::put('shared-workspaces/{workspace}/assets/{asset}', [SharedFinancialWorkspaceController::class, 'updateAsset']);
+    Route::delete('shared-workspaces/{workspace}/assets/{asset}', [SharedFinancialWorkspaceController::class, 'destroyAsset']);
     Route::post('shared-workspaces/{workspace}/goals', [SharedFinancialWorkspaceController::class, 'createGoal']);
+    Route::put('shared-workspaces/{workspace}/goals/{goal}', [SharedFinancialWorkspaceController::class, 'updateGoal']);
+    Route::delete('shared-workspaces/{workspace}/goals/{goal}', [SharedFinancialWorkspaceController::class, 'destroyGoal']);
     Route::post('shared-workspaces/{workspace}/goals/{goal}/allocations', [SharedFinancialWorkspaceController::class, 'allocateGoal']);
     Route::post('shared-workspaces/{workspace}/assets/{asset}/transactions', [SharedFinancialWorkspaceController::class, 'transactAsset']);
     Route::delete('shared-workspaces/{workspace}/members/{member}', [SharedFinancialWorkspaceController::class, 'removeMember']);

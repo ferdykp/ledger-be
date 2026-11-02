@@ -164,4 +164,72 @@ class SharedFinancialWorkspaceTest extends TestCase
             'action' => 'purchase', 'amount' => '300000.00', 'quantity' => '0.00300000', 'transaction_date' => '2026-11-02',
         ])->assertCreated()->assertJsonPath('data.cash_balance', '700000.00')->assertJsonPath('data.members.0.cash_reserved', '600000');
     }
+
+    public function test_only_owner_can_delete_workspace_and_cash_must_be_settled_first(): void
+    {
+        $owner = User::factory()->create();
+        $partner = User::factory()->create();
+        $account = $owner->accounts()->create(['name' => 'BCA', 'type' => 'bank', 'balance' => '500000.00']);
+        $this->actingAs($owner);
+        $workspace = $this->postJson('/api/shared-workspaces', ['name' => 'Ruang Hapus'])->assertCreated()->json('data');
+        $invitation = $this->postJson("/api/shared-workspaces/{$workspace['id']}/invitations", ['email' => $partner->email])->assertCreated()->json('data');
+        $this->actingAs($partner)->postJson('/api/shared-workspaces/invitations/accept', ['token' => $invitation['invite_token']])->assertOk();
+
+        $this->deleteJson("/api/shared-workspaces/{$workspace['id']}")->assertForbidden();
+        $this->actingAs($owner)->postJson("/api/shared-workspaces/{$workspace['id']}/contributions", [
+            'source_account_id' => $account->id, 'amount' => '500000.00', 'entry_date' => '2026-11-02',
+        ])->assertCreated();
+        $this->deleteJson("/api/shared-workspaces/{$workspace['id']}")->assertStatus(409);
+        $this->postJson("/api/shared-workspaces/{$workspace['id']}/withdrawals", [
+            'destination_account_id' => $account->id, 'amount' => '500000.00', 'entry_date' => '2026-11-02',
+        ])->assertCreated();
+
+        $this->deleteJson("/api/shared-workspaces/{$workspace['id']}")->assertOk();
+        $this->getJson("/api/shared-workspaces/{$workspace['id']}")->assertNotFound();
+    }
+
+    public function test_asset_deletion_requires_zero_holdings_and_removes_asset_history(): void
+    {
+        $user = User::factory()->create();
+        $account = $user->accounts()->create(['name' => 'BCA', 'type' => 'bank', 'balance' => '300000.00']);
+        $this->actingAs($user);
+        $workspace = $this->postJson('/api/shared-workspaces', ['name' => 'Emas Bareng'])->assertCreated()->json('data');
+        $this->postJson("/api/shared-workspaces/{$workspace['id']}/contributions", [
+            'source_account_id' => $account->id, 'amount' => '300000.00', 'entry_date' => '2026-11-02',
+        ])->assertCreated();
+        $asset = $this->postJson("/api/shared-workspaces/{$workspace['id']}/assets", ['name' => 'Emas Digital'])->assertCreated()->json('data.assets.0');
+        $this->postJson("/api/shared-workspaces/{$workspace['id']}/assets/{$asset['id']}/transactions", [
+            'action' => 'purchase', 'amount' => '300000.00', 'quantity' => '0.00300000', 'transaction_date' => '2026-11-02',
+        ])->assertCreated();
+
+        $this->deleteJson("/api/shared-workspaces/{$workspace['id']}/assets/{$asset['id']}")->assertStatus(409);
+        $this->postJson("/api/shared-workspaces/{$workspace['id']}/assets/{$asset['id']}/transactions", [
+            'action' => 'sale', 'amount' => '300000.00', 'quantity' => '0.00300000', 'transaction_date' => '2026-11-02',
+        ])->assertCreated();
+        $this->deleteJson("/api/shared-workspaces/{$workspace['id']}/assets/{$asset['id']}")
+            ->assertOk()->assertJsonCount(0, 'data.assets');
+        $this->assertDatabaseMissing('shared_asset_transactions', ['asset_id' => $asset['id']]);
+    }
+
+    public function test_goal_deletion_requires_all_reserved_cash_to_be_released(): void
+    {
+        $user = User::factory()->create();
+        $account = $user->accounts()->create(['name' => 'BCA', 'type' => 'bank', 'balance' => '100000.00']);
+        $this->actingAs($user);
+        $workspace = $this->postJson('/api/shared-workspaces', ['name' => 'Rencana Bersama'])->assertCreated()->json('data');
+        $this->postJson("/api/shared-workspaces/{$workspace['id']}/contributions", [
+            'source_account_id' => $account->id, 'amount' => '100000.00', 'entry_date' => '2026-11-02',
+        ])->assertCreated();
+        $goal = $this->postJson("/api/shared-workspaces/{$workspace['id']}/goals", ['name' => 'Liburan', 'target_amount' => '100000.00'])->assertCreated()->json('data.goals.0');
+        $this->postJson("/api/shared-workspaces/{$workspace['id']}/goals/{$goal['id']}/allocations", [
+            'action' => 'allocate', 'amount' => '100000.00', 'allocation_date' => '2026-11-02',
+        ])->assertCreated();
+
+        $this->deleteJson("/api/shared-workspaces/{$workspace['id']}/goals/{$goal['id']}")->assertStatus(409);
+        $this->postJson("/api/shared-workspaces/{$workspace['id']}/goals/{$goal['id']}/allocations", [
+            'action' => 'release', 'amount' => '100000.00', 'allocation_date' => '2026-11-02',
+        ])->assertCreated();
+        $this->deleteJson("/api/shared-workspaces/{$workspace['id']}/goals/{$goal['id']}")
+            ->assertOk()->assertJsonCount(0, 'data.goals');
+    }
 }

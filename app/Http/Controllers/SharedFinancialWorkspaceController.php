@@ -22,6 +22,18 @@ class SharedFinancialWorkspaceController extends Controller
         return response()->json(['data' => $service->create($request->user(), $data['name'])], 201);
     }
 
+    public function destroy(Request $request, int $workspace, SharedFinancialWorkspaceService $service)
+    {
+        $service->deleteWorkspace($request->user(), $workspace);
+        return response()->json(['message' => 'Ruang bersama dan seluruh data kolaborasinya berhasil dihapus.']);
+    }
+
+    public function update(Request $request, int $workspace, SharedFinancialWorkspaceService $service)
+    {
+        $data = $request->validate(['name' => ['required', 'string', 'max:120']]);
+        return response()->json(['data' => $service->updateWorkspace($request->user(), $workspace, $data['name'])]);
+    }
+
     public function show(Request $request, int $workspace, SharedFinancialWorkspaceService $service)
     {
         return response()->json(['data' => $service->snapshot($request->user(), $workspace)]);
@@ -89,6 +101,17 @@ class SharedFinancialWorkspaceController extends Controller
         return response()->json(['data' => $service->createAsset($request->user(), $workspace, $data)], 201);
     }
 
+    public function destroyAsset(Request $request, int $workspace, int $asset, SharedFinancialWorkspaceService $service)
+    {
+        return response()->json(['data' => $service->deleteAsset($request->user(), $workspace, $asset)]);
+    }
+
+    public function updateAsset(Request $request, int $workspace, int $asset, SharedFinancialWorkspaceService $service)
+    {
+        $data = $request->validate(['name' => ['required', 'string', 'max:160'], 'provider' => ['nullable', 'string', 'max:160']]);
+        return response()->json(['data' => $service->updateAsset($request->user(), $workspace, $asset, $data)]);
+    }
+
     public function createGoal(Request $request, int $workspace, SharedFinancialWorkspaceService $service)
     {
         $data = $request->validate([
@@ -96,6 +119,21 @@ class SharedFinancialWorkspaceController extends Controller
             'target_date' => ['nullable', 'date'],
         ]);
         return response()->json(['data' => $service->createGoal($request->user(), $workspace, $data)], 201);
+    }
+
+    public function destroyGoal(Request $request, int $workspace, int $goal, SharedFinancialWorkspaceService $service)
+    {
+        return response()->json(['data' => $service->deleteGoal($request->user(), $workspace, $goal)]);
+    }
+
+    public function updateGoal(Request $request, int $workspace, int $goal, SharedFinancialWorkspaceService $service)
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:160'],
+            'target_amount' => ['required', 'numeric', 'gt:0', 'decimal:0,2', 'max:9999999999999.99'],
+            'target_date' => ['nullable', 'date'],
+        ]);
+        return response()->json(['data' => $service->updateGoal($request->user(), $workspace, $goal, $data)]);
     }
 
     public function allocateGoal(Request $request, int $workspace, int $goal, SharedFinancialWorkspaceService $service)

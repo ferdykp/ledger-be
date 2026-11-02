@@ -34,6 +34,18 @@ class AssetController extends Controller
         return response()->json(['data' => $service->snapshot($asset)]);
     }
 
+    public function update(Request $request, Asset $asset, AssetService $service)
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:160'],
+            'provider' => ['nullable', 'string', 'max:160'],
+            'identifier' => ['nullable', 'string', 'max:100'],
+            'storage_type' => ['nullable', Rule::in(['physical', 'digital'])],
+        ]);
+        $updated = $service->updateMetadata($request->user(), $asset, $data);
+        return response()->json(['data' => $service->snapshot($updated)]);
+    }
+
     public function destroy(Request $request, Asset $asset, AssetService $service)
     {
         $service->delete($request->user(), $asset);
@@ -147,5 +159,13 @@ class AssetController extends Controller
             ['amount' => $data['amount'], 'updated_at' => now(), 'created_at' => now()],
         );
         return response()->json(['message' => 'Target investasi bulanan disimpan.']);
+    }
+
+    public function deleteMonthlyTarget(Request $request)
+    {
+        $data = $request->validate(['type' => ['required', Rule::in(['gold', 'rdpu'])]]);
+        $deleted = DB::table('asset_monthly_targets')->where('user_id', $request->user()->id)->where('asset_type', $data['type'])->delete();
+        abort_unless($deleted, 404, 'Target bulanan tidak ditemukan.');
+        return response()->json(['message' => 'Target investasi bulanan dihapus.']);
     }
 }

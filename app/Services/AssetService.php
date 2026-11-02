@@ -93,6 +93,21 @@ class AssetService
         }, 3);
     }
 
+    public function updateMetadata(User $user, Asset $asset, array $data): Asset
+    {
+        abort_unless($asset->user_id === $user->id, 404);
+        return DB::transaction(function () use ($user, $asset, $data) {
+            $asset = Asset::where('user_id', $user->id)->lockForUpdate()->findOrFail($asset->id);
+            $asset->update([
+                'name' => trim($data['name']),
+                'provider' => $data['provider'] ?? null,
+                'identifier' => $data['identifier'] ?? null,
+                'storage_type' => $asset->type === 'gold' ? ($data['storage_type'] ?? $asset->storage_type) : null,
+            ]);
+            return $asset->fresh();
+        }, 3);
+    }
+
     public function delete(User $user, Asset $asset): void
     {
         abort_unless($asset->user_id === $user->id, 404);

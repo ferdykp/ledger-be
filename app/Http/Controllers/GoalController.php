@@ -7,6 +7,7 @@ use App\Http\Requests\Goal\StoreGoalRequest;
 use App\Http\Resources\GoalContributionResource;
 use App\Http\Resources\GoalResource;
 use App\Models\Goal;
+use App\Models\GoalContribution;
 use App\Support\DecimalMath;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -112,6 +113,43 @@ class GoalController extends Controller
             'message' => $created ? 'Berhasil menambah tabungan!' : 'Setoran sudah tercatat.',
             'data' => new GoalResource($goal->fresh()->load(['items.obligations.payments'])),
         ]);
+    }
+
+    public function updateContribution(AddContributionRequest $request, Goal $goal, GoalContribution $contribution): JsonResponse
+    {
+        $this->authorizeOwner($request->user()->id, $goal);
+        abort_unless($contribution->goal_id === $goal->id, 404);
+        $data = $request->safe()->except('idempotency_key');
+        $updatedGoal = DB::transaction(function () use ($request, $goal, $contribution, $data) {
+            $lockedGoal = Goal::where('user_id', $request->user()->id)->lockForUpdate()->findOrFail($goal->id);
+            $lockedContribution = GoalContribution::where('goal_id', $lockedGoal->id)->lockForUpdate()->findOrFail($contribution->id);
+            $delta = DecimalMath::subtract((string) $data['amount'], (string) $lockedContribution->amount);
+            $current = (string) $lockedGoal->current_amount;
+            if (DecimalMath::compare($delta, '0.00') < 0 && DecimalMath::compare($current, DecimalMath::subtract('0.00', $delta)) < 0) {
+                abort(409, 'Saldo target tidak cukup untuk mengurangi nominal setoran tersebut.');
+            }
+            $lockedContribution->update($data);
+            $lockedGoal->current_amount = DecimalMath::add($current, $delta);
+            $lockedGoal->save();
+            return $lockedGoal->fresh()->load(['items.obligations.payments']);
+        }, 3);
+        return response()->json(['data' => new GoalResource($updatedGoal)]);
+    }
+
+    public function deleteContribution(Request $request, Goal $goal, GoalContribution $contribution): JsonResponse
+    {
+        $this->authorizeOwner($request->user()->id, $goal);
+        abort_unless($contribution->goal_id === $goal->id, 404);
+        $updatedGoal = DB::transaction(function () use ($request, $goal, $contribution) {
+            $lockedGoal = Goal::where('user_id', $request->user()->id)->lockForUpdate()->findOrFail($goal->id);
+            $lockedContribution = GoalContribution::where('goal_id', $lockedGoal->id)->lockForUpdate()->findOrFail($contribution->id);
+            abort_if(DecimalMath::compare((string) $lockedGoal->current_amount, (string) $lockedContribution->amount) < 0, 409, 'Saldo target tidak cukup untuk menghapus catatan setoran ini.');
+            $lockedGoal->current_amount = DecimalMath::subtract((string) $lockedGoal->current_amount, (string) $lockedContribution->amount);
+            $lockedGoal->save();
+            $lockedContribution->delete();
+            return $lockedGoal->fresh()->load(['items.obligations.payments']);
+        }, 3);
+        return response()->json(['data' => new GoalResource($updatedGoal)]);
     }
 
     private function authorizeOwner(int $userId, Goal $goal): void

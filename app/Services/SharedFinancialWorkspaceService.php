@@ -35,6 +35,28 @@ class SharedFinancialWorkspaceService
         }, 3);
     }
 
+    public function deleteWorkspace(User $user, int $workspaceId): void
+    {
+        DB::transaction(function () use ($user, $workspaceId) {
+            $this->lockedWorkspace($user, $workspaceId, true);
+            $cash = (string) (DB::table('shared_financial_workspace_member_cash')->where('workspace_id', $workspaceId)->sum('balance') ?? '0.00');
+            abort_if(DecimalMath::compare($cash, '0.00') > 0, 409, 'Kosongkan kas bersama dengan menarik saldo anggota terlebih dahulu.');
+            $hasUnits = DB::table('shared_asset_member_holdings')->join('shared_assets', 'shared_assets.id', '=', 'shared_asset_member_holdings.asset_id')
+                ->where('shared_assets.workspace_id', $workspaceId)->where('shared_asset_member_holdings.quantity', '>', 0)->exists();
+            abort_if($hasUnits, 409, 'Selesaikan atau jual seluruh kepemilikan aset bersama sebelum menghapus ruang.');
+            DB::table('shared_financial_workspaces')->where('id', $workspaceId)->delete();
+        }, 3);
+    }
+
+    public function updateWorkspace(User $user, int $workspaceId, string $name): array
+    {
+        $this->lockedWorkspace($user, $workspaceId, true);
+        DB::table('shared_financial_workspaces')->where('id', $workspaceId)->update([
+            'name' => trim($name), 'updated_at' => now(),
+        ]);
+        return $this->snapshot($user, $workspaceId);
+    }
+
     public function invite(User $user, int $workspaceId, string $email): array
     {
         $workspace = $this->lockedWorkspace($user, $workspaceId, true);
@@ -138,6 +160,34 @@ class SharedFinancialWorkspaceService
         return $this->snapshot($user, $workspaceId);
     }
 
+    public function deleteGoal(User $user, int $workspaceId, int $goalId): array
+    {
+        return DB::transaction(function () use ($user, $workspaceId, $goalId) {
+            $this->lockedWorkspace($user, $workspaceId, true);
+            $goal = DB::table('shared_financial_workspace_goals')->where('workspace_id', $workspaceId)->lockForUpdate()->find($goalId);
+            abort_unless($goal, 404, 'Target bersama tidak ditemukan.');
+            $allocated = (string) (DB::table('shared_financial_workspace_goal_allocations')->where('workspace_id', $workspaceId)->where('goal_id', $goalId)
+                ->selectRaw("COALESCE(SUM(CASE WHEN action = 'allocate' THEN amount ELSE -amount END), 0) as total")->value('total') ?? '0.00');
+            abort_if(DecimalMath::compare($allocated, '0.00') !== 0, 409, 'Lepaskan seluruh cadangan kas pada target ini sebelum menghapusnya.');
+            DB::table('shared_financial_workspace_goals')->where('id', $goalId)->delete();
+            return $this->snapshot($user, $workspaceId);
+        }, 3);
+    }
+
+    public function updateGoal(User $user, int $workspaceId, int $goalId, array $data): array
+    {
+        return DB::transaction(function () use ($user, $workspaceId, $goalId, $data) {
+            $this->lockedWorkspace($user, $workspaceId, true);
+            $goal = DB::table('shared_financial_workspace_goals')->where('workspace_id', $workspaceId)->lockForUpdate()->find($goalId);
+            abort_unless($goal, 404, 'Target bersama tidak ditemukan.');
+            DB::table('shared_financial_workspace_goals')->where('id', $goalId)->update([
+                'name' => trim($data['name']), 'target_amount' => $data['target_amount'],
+                'target_date' => $data['target_date'] ?? null, 'updated_at' => now(),
+            ]);
+            return $this->snapshot($user, $workspaceId);
+        }, 3);
+    }
+
     public function allocateGoal(User $user, int $workspaceId, int $goalId, array $data): array
     {
         return DB::transaction(function () use ($user, $workspaceId, $goalId, $data) {
@@ -181,6 +231,32 @@ class SharedFinancialWorkspaceService
             'created_at' => now(), 'updated_at' => now(),
         ]);
         return $this->snapshot($user, $workspaceId);
+    }
+
+    public function deleteAsset(User $user, int $workspaceId, int $assetId): array
+    {
+        return DB::transaction(function () use ($user, $workspaceId, $assetId) {
+            $this->lockedWorkspace($user, $workspaceId, true);
+            $asset = DB::table('shared_assets')->where('workspace_id', $workspaceId)->lockForUpdate()->find($assetId);
+            abort_unless($asset, 404, 'Aset bersama tidak ditemukan.');
+            $hasUnits = DB::table('shared_asset_member_holdings')->where('asset_id', $assetId)->where('quantity', '>', 0)->exists();
+            abort_if($hasUnits, 409, 'Aset masih memiliki kepemilikan. Jual atau selesaikan semua gram sebelum menghapus aset.');
+            DB::table('shared_assets')->where('id', $assetId)->delete();
+            return $this->snapshot($user, $workspaceId);
+        }, 3);
+    }
+
+    public function updateAsset(User $user, int $workspaceId, int $assetId, array $data): array
+    {
+        return DB::transaction(function () use ($user, $workspaceId, $assetId, $data) {
+            $this->lockedWorkspace($user, $workspaceId, true);
+            $asset = DB::table('shared_assets')->where('workspace_id', $workspaceId)->lockForUpdate()->find($assetId);
+            abort_unless($asset, 404, 'Aset bersama tidak ditemukan.');
+            DB::table('shared_assets')->where('id', $assetId)->update([
+                'name' => trim($data['name']), 'provider' => $data['provider'] ?? null, 'updated_at' => now(),
+            ]);
+            return $this->snapshot($user, $workspaceId);
+        }, 3);
     }
 
     public function transactAsset(User $user, int $workspaceId, int $assetId, array $data): array
