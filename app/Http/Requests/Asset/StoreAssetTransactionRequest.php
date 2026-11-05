@@ -15,7 +15,7 @@ class StoreAssetTransactionRequest extends FormRequest
             'status' => ['nullable', Rule::in(['pending', 'confirmed', 'settled'])],
             'cash_account_id' => ['nullable', 'integer', Rule::exists('accounts', 'id')->where('user_id', $this->user()->id)],
             'amount' => ['required', 'numeric', 'gte:0', 'decimal:0,2', 'max:9999999999999.99'],
-            'quantity' => [Rule::requiredIf(fn () => $this->route('asset') instanceof \App\Models\Asset && ($this->route('asset')->type === 'gold' || ($this->route('asset')->type === 'rdpu' && ($this->input('type') === 'redemption' || $this->input('status') === 'confirmed')))), 'nullable', 'numeric', 'gt:0', 'decimal:0,8', 'max:999999999.99999999'],
+            'quantity' => [Rule::requiredIf(fn () => $this->route('asset') instanceof \App\Models\Asset && ($this->route('asset')->type === 'gold' || ($this->route('asset')->type === 'rdpu' && ! in_array($this->route('asset')->valuation_mode, ['manual', 'value_only'], true) && ($this->input('type') === 'redemption' || $this->input('status') === 'confirmed')))), 'nullable', 'numeric', 'gt:0', 'decimal:0,8', 'max:999999999.99999999'],
             'unit_price' => ['nullable', 'numeric', 'gt:0', 'decimal:0,8', 'max:9999999999999999.99999999'],
             'price_unit_grams' => ['nullable', 'numeric', 'gt:0', 'decimal:0,8', 'max:99999999.99999999'],
             'fees' => ['nullable', 'numeric', 'gte:0', 'decimal:0,2', 'max:9999999999999.99'],

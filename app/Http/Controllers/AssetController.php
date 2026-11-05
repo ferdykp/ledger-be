@@ -41,6 +41,8 @@ class AssetController extends Controller
             'provider' => ['nullable', 'string', 'max:160'],
             'identifier' => ['nullable', 'string', 'max:100'],
             'storage_type' => ['nullable', Rule::in(['physical', 'digital'])],
+            'start_date' => ['nullable', 'date'],
+            'maturity_date' => ['nullable', 'date', 'after_or_equal:start_date'],
         ]);
         $updated = $service->updateMetadata($request->user(), $asset, $data);
         return response()->json(['data' => $service->snapshot($updated)]);

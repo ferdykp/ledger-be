@@ -34,6 +34,7 @@ class AssetService
                 'amount' => $data['initial_cost_basis'] ?? null,
                 'current_value' => $data['initial_current_value'] ?? null,
                 'nav' => $data['initial_nav'] ?? null,
+                'price' => $data['initial_price'] ?? null,
                 'transaction_date' => $data['initial_date'] ?? null,
                 'mode' => $data['opening_mode'] ?? 'units',
             ];
@@ -46,10 +47,13 @@ class AssetService
                 'fees' => $data['purchase_fees'] ?? '0.00',
                 'date' => $data['purchase_date'] ?? null,
             ];
-            unset($data['ownership_source'], $data['initial_quantity'], $data['initial_cost_basis'], $data['initial_current_value'], $data['initial_nav'], $data['initial_date'], $data['opening_mode'], $data['purchase_amount'], $data['purchase_quantity'], $data['purchase_status'], $data['purchase_cash_account_id'], $data['purchase_cash_debited'], $data['purchase_fees'], $data['purchase_date']);
-            if ($assetType === 'rdpu') {
-                $data['valuation_mode'] = $ownershipSource === 'existing' && $initial['mode'] === 'value_only' ? 'value_only' : 'units';
-                $data['manual_current_value'] = $data['valuation_mode'] === 'value_only' ? $initial['current_value'] : null;
+            unset($data['ownership_source'], $data['initial_quantity'], $data['initial_cost_basis'], $data['initial_current_value'], $data['initial_nav'], $data['initial_price'], $data['initial_date'], $data['opening_mode'], $data['purchase_amount'], $data['purchase_quantity'], $data['purchase_status'], $data['purchase_cash_account_id'], $data['purchase_cash_debited'], $data['purchase_fees'], $data['purchase_date']);
+            if (in_array($assetType, ['rdpu', 'deposit'], true)) {
+                $manualMode = $assetType === 'deposit' || $ownershipSource === 'new' || $initial['mode'] === 'value_only';
+                $data['valuation_mode'] = $manualMode ? 'manual' : 'units';
+                $data['manual_current_value'] = $manualMode
+                    ? ($ownershipSource === 'existing' ? ($initial['current_value'] ?? '0.00') : '0.00')
+                    : null;
             }
             $asset = $user->assets()->create($data + ['currency' => 'IDR']);
 
@@ -58,7 +62,7 @@ class AssetService
                 $amount = (string) $purchase['amount'];
                 $this->recordTransaction($user, $asset, [
                     'type' => $assetType === 'gold' ? 'purchase' : 'subscription',
-                    'status' => $assetType === 'gold' ? 'settled' : $purchase['status'],
+                    'status' => $assetType === 'gold' ? 'settled' : (in_array($assetType, ['rdpu', 'deposit'], true) && in_array($asset->valuation_mode, ['manual', 'value_only'], true) ? 'confirmed' : $purchase['status']),
                     'amount' => $amount,
                     'quantity' => $quantity,
                     'unit_price' => DecimalMath::compare($quantity, '0.00000000', 8) > 0 ? DecimalMath::divide($amount, $quantity, 8) : null,
@@ -72,19 +76,22 @@ class AssetService
 
             if ($ownershipSource === 'existing') {
                 $amount = (string) ($initial['amount'] ?? '0.00');
-                $quantity = $asset->type === 'rdpu' && $initial['mode'] === 'value_only' ? '0.00000000' : (string) $initial['quantity'];
+                $manualMode = in_array($asset->type, ['rdpu', 'deposit'], true) && in_array($asset->valuation_mode, ['manual', 'value_only'], true);
+                $quantity = $manualMode ? (string) ($initial['current_value'] ?? $amount) : (string) $initial['quantity'];
                 $known = $initial['amount'] !== null && DecimalMath::compare($amount, '0.00') > 0;
                 AssetTransaction::create([
                     'user_id' => $user->id, 'asset_id' => $asset->id,
                     'type' => $asset->type === 'gold' ? 'purchase' : 'subscription',
                     'status' => $asset->type === 'gold' ? 'settled' : 'confirmed', 'origin' => 'opening',
-                    'cash_debited' => false, 'amount' => $amount, 'quantity' => $quantity,
+                    'cash_debited' => false, 'amount' => $manualMode && ! $known ? (string) $initial['current_value'] : $amount, 'quantity' => $quantity,
                     'unit_price' => $known && DecimalMath::compare($quantity, '0.00000000', 8) > 0 ? DecimalMath::divide($amount, $quantity, 8) : '0.00000000',
                     'fees' => '0.00', 'cost_basis' => $known ? $amount : '0.00', 'cost_basis_known' => $known,
                     'transaction_date' => $initial['transaction_date'], 'confirmed_at' => now(),
                     'notes' => 'Saldo awal aset yang sudah dimiliki sebelum menggunakan Ledger.',
                 ]);
-                if ($asset->type === 'rdpu' && $initial['mode'] === 'units' && $initial['nav']) {
+                if ($asset->type === 'gold' && $initial['price']) {
+                    $asset->prices()->create(['price' => $initial['price'], 'unit' => 'IDR/gram', 'source' => 'saldo-awal', 'captured_at' => $initial['transaction_date']]);
+                } elseif ($asset->type === 'rdpu' && $initial['mode'] === 'units' && $initial['nav']) {
                     $asset->prices()->create(['price' => $initial['nav'], 'unit' => 'IDR/unit', 'source' => 'saldo-awal', 'captured_at' => $initial['transaction_date']]);
                 }
             }
@@ -103,6 +110,8 @@ class AssetService
                 'provider' => $data['provider'] ?? null,
                 'identifier' => $data['identifier'] ?? null,
                 'storage_type' => $asset->type === 'gold' ? ($data['storage_type'] ?? $asset->storage_type) : null,
+                'start_date' => $data['start_date'] ?? $asset->start_date,
+                'maturity_date' => $data['maturity_date'] ?? $asset->maturity_date,
             ]);
             return $asset->fresh();
         }, 3);
@@ -187,17 +196,17 @@ class AssetService
             $type = $data['type'];
             $isBuy = in_array($type, ['purchase', 'subscription'], true);
             $isSell = in_array($type, ['sale', 'redemption'], true);
-            if (($asset->type === 'gold' && ! in_array($type, ['purchase', 'sale'], true)) || ($asset->type === 'rdpu' && ! in_array($type, ['subscription', 'redemption'], true))) {
+            if (($asset->type === 'gold' && ! in_array($type, ['purchase', 'sale'], true)) || ($asset->type !== 'gold' && ! in_array($type, ['subscription', 'redemption'], true))) {
                 throw ValidationException::withMessages(['type' => 'Jenis transaksi tidak sesuai dengan jenis aset.']);
             }
             $status = $data['status'] ?? ($asset->type === 'gold' ? 'settled' : ($isSell ? 'pending' : 'pending'));
             $amount = (string) $data['amount'];
             $fees = (string) ($data['fees'] ?? '0.00');
-            $manualRdpu = $asset->type === 'rdpu' && in_array($asset->valuation_mode, ['manual', 'value_only'], true);
-            $quantity = $manualRdpu
+            $manualValuation = in_array($asset->type, ['rdpu', 'deposit'], true) && in_array($asset->valuation_mode, ['manual', 'value_only'], true);
+            $quantity = $manualValuation
                 ? ($isSell ? $this->manualQuantityForValue($asset, $amount) : DecimalMath::add($amount, $fees))
                 : (string) ($data['quantity'] ?? '0');
-            if ($asset->type === 'rdpu' && ! $manualRdpu && in_array($type, ['subscription', 'redemption'], true)
+            if ($asset->type === 'rdpu' && ! $manualValuation && in_array($type, ['subscription', 'redemption'], true)
                 && ! ($type === 'subscription' && $status === 'pending')
                 && DecimalMath::compare($quantity, '0.00000000', 8) <= 0) {
                 throw ValidationException::withMessages(['quantity' => 'Masukkan jumlah unit sesuai bukti transaksi.']);
@@ -219,7 +228,7 @@ class AssetService
             }
             if (! empty($data['cash_account_id'])) $cashAccount = Account::where('user_id', $user->id)->lockForUpdate()->findOrFail($data['cash_account_id']);
 
-            $unitPrice = $manualRdpu
+            $unitPrice = $manualValuation
                 ? '0.00000000'
                 : (string) ($data['unit_price'] ?? (DecimalMath::compare($quantity, '0.00000000', 8) > 0 ? DecimalMath::divide($amount, $quantity, 8) : '0.00000000'));
             $storedStatus = $isSell && $status === 'settled' ? 'pending' : $status;
@@ -255,7 +264,7 @@ class AssetService
                 $transaction->update(['status' => 'settled', 'settled_at' => now()]);
             }
 
-            if ($manualRdpu && $isBuy && in_array($status, ['confirmed', 'settled'], true)) {
+            if ($manualValuation && $isBuy && in_array($status, ['confirmed', 'settled'], true)) {
                 $asset->manual_current_value = DecimalMath::add((string) $asset->manual_current_value, $amount);
                 $asset->save();
             }
@@ -275,9 +284,9 @@ class AssetService
             $next = $data['status'];
 
             if (in_array($transaction->type, ['subscription'], true) && $next === 'confirmed') {
-                $manualRdpu = $asset->type === 'rdpu' && in_array($asset->valuation_mode, ['manual', 'value_only'], true);
-                $quantity = $manualRdpu ? (string) $transaction->amount : (string) ($data['quantity'] ?? $transaction->quantity);
-                $unitPrice = $manualRdpu ? '1.00000000' : (string) ($data['unit_price'] ?? (DecimalMath::compare($quantity, '0.00000000', 8) > 0 ? DecimalMath::divide((string) $transaction->amount, $quantity, 8) : '0.00000000'));
+                $manualValuation = in_array($asset->type, ['rdpu', 'deposit'], true) && in_array($asset->valuation_mode, ['manual', 'value_only'], true);
+                $quantity = $manualValuation ? (string) $transaction->amount : (string) ($data['quantity'] ?? $transaction->quantity);
+                $unitPrice = $manualValuation ? '1.00000000' : (string) ($data['unit_price'] ?? (DecimalMath::compare($quantity, '0.00000000', 8) > 0 ? DecimalMath::divide((string) $transaction->amount, $quantity, 8) : '0.00000000'));
                 $cashDebited = (bool) ($data['cash_debited'] ?? $transaction->cash_debited);
                 if (! $cashDebited) throw ValidationException::withMessages(['cash_debited' => 'Konfirmasi pembelian memerlukan konfirmasi bahwa dana sudah keluar.']);
                 if ($cashDebited && ! $transaction->cash_debited) {
@@ -289,13 +298,13 @@ class AssetService
                     $transaction->cash_transaction_id = $cashTransaction->id;
                     $transaction->cash_account_id = $account->id;
                 }
-                if (! $manualRdpu && (DecimalMath::compare($quantity, '0.00000000', 8) <= 0 || DecimalMath::compare($unitPrice, '0.00000000', 8) <= 0)) throw ValidationException::withMessages(['quantity' => 'Masukkan unit penyertaan aktual yang tertera setelah pembelian dikonfirmasi.']);
+                if (! $manualValuation && (DecimalMath::compare($quantity, '0.00000000', 8) <= 0 || DecimalMath::compare($unitPrice, '0.00000000', 8) <= 0)) throw ValidationException::withMessages(['quantity' => 'Masukkan unit penyertaan aktual yang tertera setelah pembelian dikonfirmasi.']);
                 $transaction->quantity = $quantity;
                 $transaction->unit_price = $unitPrice;
                 $transaction->cash_debited = true;
                 $transaction->status = 'confirmed';
                 $transaction->confirmed_at = now();
-                if ($manualRdpu) {
+                if ($manualValuation) {
                     $asset->manual_current_value = DecimalMath::add((string) $asset->manual_current_value, (string) $transaction->amount);
                     $asset->save();
                 }
@@ -306,7 +315,7 @@ class AssetService
                 $amount = (string) ($data['amount'] ?? '0');
                 $fees = (string) ($data['fees'] ?? $transaction->fees);
                 if (DecimalMath::compare($amount, '0.00') <= 0) throw ValidationException::withMessages(['amount' => 'Masukkan hasil pencairan aktual.']);
-                if ($asset->type === 'rdpu' && in_array($asset->valuation_mode, ['manual', 'value_only'], true)) {
+                if (in_array($asset->type, ['rdpu', 'deposit'], true) && in_array($asset->valuation_mode, ['manual', 'value_only'], true)) {
                     $transaction->quantity = $this->manualQuantityForValue($asset, $amount);
                 }
                 $this->assertSellable($user, $asset, (string) $transaction->quantity, $transaction->id);
@@ -337,7 +346,7 @@ class AssetService
         abort_unless($asset->user_id === $user->id, 404);
         return DB::transaction(function () use ($user, $asset, $data) {
             $asset = Asset::where('user_id', $user->id)->lockForUpdate()->findOrFail($asset->id);
-            if ($asset->type === 'rdpu' && in_array($asset->valuation_mode, ['manual', 'value_only'], true)) {
+            if (in_array($asset->type, ['rdpu', 'deposit'], true) && in_array($asset->valuation_mode, ['manual', 'value_only'], true)) {
                 $asset->manual_current_value = $data['price'];
                 $asset->save();
                 $unit = 'IDR/portfolio';
@@ -418,8 +427,8 @@ class AssetService
         abort_unless($asset->user_id === $user->id, 404);
         return DB::transaction(function () use ($user, $asset, $data) {
             $asset = Asset::where('user_id', $user->id)->lockForUpdate()->findOrFail($asset->id);
-            if ($asset->type === 'rdpu' && in_array($asset->valuation_mode, ['manual', 'value_only'], true)) {
-                throw ValidationException::withMessages(['asset' => 'Lengkapi unit RDPU sebelum mengimpor histori pembelian.']);
+            if (in_array($asset->type, ['rdpu', 'deposit'], true) && in_array($asset->valuation_mode, ['manual', 'value_only'], true)) {
+                throw ValidationException::withMessages(['asset' => 'Impor histori berbasis unit hanya tersedia untuk aset yang dicatat dengan kuantitas aktual.']);
             }
             $requestHash = hash('sha256', json_encode([
                 'reconcile_opening' => (bool) ($data['reconcile_opening'] ?? false),
@@ -531,8 +540,8 @@ class AssetService
         abort_unless($goal->user_id === $user->id && $asset->user_id === $user->id, 404);
         return DB::transaction(function () use ($user, $goal, $asset, $data) {
             $asset = Asset::where('user_id', $user->id)->lockForUpdate()->findOrFail($asset->id);
-            if ($asset->type === 'rdpu' && in_array($asset->valuation_mode, ['manual', 'value_only'], true)) {
-                throw ValidationException::withMessages(['asset' => 'Lengkapi unit penyertaan RDPU sebelum mengalokasikan aset ke target.']);
+            if (in_array($asset->type, ['rdpu', 'deposit'], true) && in_array($asset->valuation_mode, ['manual', 'value_only'], true)) {
+                throw ValidationException::withMessages(['asset' => 'Aset nilai manual belum dapat dialokasikan berdasarkan kuantitas.']);
             }
             if (! empty($data['idempotency_key'])) {
                 $existing = GoalAssetAllocation::where('user_id', $user->id)->where('idempotency_key', $data['idempotency_key'])->first();
@@ -569,20 +578,23 @@ class AssetService
         $bookValue = '0.00';
         $reserved = '0.00000000';
         $realized = '0.00';
-        $manualRdpu = $asset->type === 'rdpu' && in_array($asset->valuation_mode, ['manual', 'value_only'], true);
+        $manualValuation = in_array($asset->type, ['rdpu', 'deposit'], true) && in_array($asset->valuation_mode, ['manual', 'value_only'], true);
         foreach ($asset->transactions->sortBy([['transaction_date', 'asc'], ['id', 'asc']]) as $tx) {
             if (in_array($tx->type, ['purchase', 'subscription'], true) && in_array($tx->status, ['confirmed', 'settled'], true)) {
-                $quantity = DecimalMath::add($quantity, $manualRdpu ? DecimalMath::add((string) $tx->amount, (string) $tx->fees) : (string) $tx->quantity, 8);
+                $manualQuantity = $tx->origin === 'opening'
+                    ? (string) $tx->quantity
+                    : DecimalMath::add((string) $tx->amount, (string) $tx->fees);
+                $quantity = DecimalMath::add($quantity, $manualValuation ? $manualQuantity : (string) $tx->quantity, 8);
                 if ($tx->cost_basis_known) $basis = DecimalMath::add($basis, DecimalMath::add((string) $tx->amount, (string) $tx->fees));
                 else $basisKnown = false;
-                $bookValue = DecimalMath::add($bookValue, $manualRdpu ? DecimalMath::add((string) $tx->amount, (string) $tx->fees) : (string) $tx->amount);
+                $bookValue = DecimalMath::add($bookValue, $manualValuation ? DecimalMath::add((string) $tx->amount, (string) $tx->fees) : (string) $tx->amount);
             } elseif (in_array($tx->type, ['sale', 'redemption'], true) && $tx->status === 'settled') {
-                $disposedBookValue = $manualRdpu
+                $disposedBookValue = $manualValuation
                     ? (string) $tx->cost_basis
                     : (DecimalMath::compare($quantity, '0.00000000', 8) > 0
                     ? DecimalMath::quantityValue((string) $tx->quantity, DecimalMath::divide($bookValue, $quantity, 8), 8)
                     : '0.00');
-                $quantity = DecimalMath::subtract($quantity, $manualRdpu ? $disposedBookValue : (string) $tx->quantity, 8);
+                $quantity = DecimalMath::subtract($quantity, (string) $tx->quantity, 8);
                 if ($tx->cost_basis_known) $basis = DecimalMath::subtract($basis, (string) $tx->cost_basis);
                 else $basisKnown = false;
                 $bookValue = DecimalMath::subtract($bookValue, $disposedBookValue);
@@ -593,22 +605,27 @@ class AssetService
         }
         $allocated = $this->sumAllocations($asset);
         $free = DecimalMath::subtract(DecimalMath::subtract($quantity, $allocated, 8), $reserved, 8);
+        $manualBalance = $manualValuation ? DecimalMath::add((string) ($asset->manual_current_value ?? $quantity), '0.00') : $bookValue;
+        // Older value-only RDPU opening rows were stored without a synthetic quantity.
+        // Use the recorded value as the internal sellable basis for those rows.
+        if ($manualValuation && DecimalMath::compare($quantity, '0.00000000', 8) <= 0 && DecimalMath::compare($manualBalance, '0.00') > 0) {
+            $quantity = $manualBalance;
+        }
         $averageCost = DecimalMath::compare($quantity, '0.00000000', 8) > 0
             ? DecimalMath::divide($basis, $quantity, 8)
             : '0.00000000';
-        $manualBalance = $manualRdpu ? DecimalMath::add((string) ($asset->manual_current_value ?? $quantity), '0.00') : $bookValue;
-        $manualAllocated = $manualRdpu
+        $manualAllocated = $manualValuation
             ? $allocated
             : DecimalMath::multiply($allocated, $averageCost, 8);
-        $manualReserved = $manualRdpu
+        $manualReserved = $manualValuation
             ? $reserved
             : DecimalMath::multiply($reserved, $averageCost, 8);
         $manualFree = DecimalMath::subtract(DecimalMath::subtract($manualBalance, $manualAllocated, 8), $manualReserved, 8);
         $price = $asset->prices->sortByDesc('captured_at')->first();
-        $value = $manualRdpu
+        $value = $manualValuation
             ? DecimalMath::add((string) ($asset->manual_current_value ?? $bookValue), '0.00')
             : ($price ? DecimalMath::quantityValue($quantity, (string) $price->price, 8) : null);
-        $allocationValue = $manualRdpu
+        $allocationValue = $manualValuation
             ? (DecimalMath::compare($quantity, '0.00000000', 8) > 0
                 ? DecimalMath::quantityValue($allocated, DecimalMath::divide((string) $value, $quantity, 8), 8)
                 : '0.00')
@@ -617,16 +634,17 @@ class AssetService
         return [
             'id' => $asset->id, 'type' => $asset->type, 'valuation_mode' => $asset->valuation_mode, 'name' => $asset->name, 'provider' => $asset->provider,
             'identifier' => $asset->identifier, 'storage_type' => $asset->storage_type,
-            'quantity' => $manualRdpu ? null : $quantity,
-            'reserved_quantity' => $manualRdpu ? null : $reserved,
-            'allocated_quantity' => $manualRdpu ? null : $allocated,
-            'unallocated_quantity' => $manualRdpu ? null : (DecimalMath::compare($free, '0.00000000', 8) < 0 ? '0.00000000' : $free),
+            'quantity' => $manualValuation ? null : $quantity,
+            'reserved_quantity' => $manualValuation ? null : $reserved,
+            'allocated_quantity' => $manualValuation ? null : $allocated,
+            'unallocated_quantity' => $manualValuation ? null : (DecimalMath::compare($free, '0.00000000', 8) < 0 ? '0.00000000' : $free),
             'manual_balance' => $manualBalance, 'manual_reserved' => $manualReserved,
             'manual_allocated' => $manualAllocated,
             'manual_unallocated' => DecimalMath::compare($manualFree, '0.00000000', 8) < 0 ? '0.00000000' : $manualFree,
             'cost_basis' => $basis, 'cost_basis_known' => $basisKnown, 'book_value' => $bookValue,
             'average_cost_per_unit' => $averageCost,
-            'latest_price' => $manualRdpu ? (string) $value : ($price ? (string) $price->price : null), 'price_unit' => $manualRdpu ? 'IDR/portfolio' : $price?->unit,
+            'latest_price' => $manualValuation ? (string) $value : ($price ? (string) $price->price : null), 'price_unit' => $manualValuation ? 'IDR/portfolio' : $price?->unit,
+            'start_date' => $asset->start_date?->format('Y-m-d'), 'maturity_date' => $asset->maturity_date?->format('Y-m-d'),
             'price_source' => $price?->source, 'valuation_at' => $price?->captured_at?->toISOString(),
             'estimated_value' => $value, 'allocated_value' => $allocationValue, 'unrealized_profit_loss' => $unrealized,
             'realized_profit_loss' => $basisKnown ? $realized : null,
@@ -647,7 +665,7 @@ class AssetService
         if (DecimalMath::compare($proceeds, '0.00') < 0) throw ValidationException::withMessages(['fees' => 'Biaya tidak boleh melebihi hasil penjualan.']);
         $cashTransaction = $this->cashLeg($user, $account, 'income', $proceeds, 'asset_sale', "Pencairan {$asset->name}", now()->toDateString());
         $sale->update(['cost_basis' => $costBasis, 'settlement_transaction_id' => $cashTransaction->id]);
-        if ($asset->type === 'rdpu' && in_array($asset->valuation_mode, ['manual', 'value_only'], true)) {
+        if (in_array($asset->type, ['rdpu', 'deposit'], true) && in_array($asset->valuation_mode, ['manual', 'value_only'], true)) {
             $asset->manual_current_value = DecimalMath::subtract((string) $asset->manual_current_value, $amount);
             $asset->save();
         }
